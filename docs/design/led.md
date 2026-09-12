@@ -4,9 +4,10 @@
 
 ATOM Matrix/Lite のオンボードRGB LED（GPIO27固定配線、ATOM Matrixは5x5 WS2812Cの
 25画素マトリクス、ATOM Liteは単色1画素）を制御する。現在`main.rs`で使っているのは
-コントローラー接続待機中のアニメーション表示と、接続完了時の消灯のみ（`on()`/`off()`）。
-○(Circle)ボタンによるON/OFFトグル（`toggle()`）はAPIとして実装済みだが、現時点では
-どのボタンにも割り当てていない（[spec.md](../spec.md)参照）。
+コントローラー接続待機中のアニメーション表示と、接続完了後のメインループでの
+状態表示（`set_ok()`/`set_error()`。[design/motor.md](motor.md)のサーボ書き込み
+成否と連動する）。○(Circle)ボタンによるON/OFFトグル（`toggle()`）はAPIとして
+実装済みだが、現時点ではどのボタンにも割り当てていない（[spec.md](../spec.md)参照）。
 
 ## ライブラリ選定
 
@@ -26,6 +27,11 @@ RMT自体は`esp-idf-hal`（`esp_idf_svc::hal::rmt`）にAPIがあるが、タ�
   画素数は呼び出し側（`main.rs`）でATOM Matrix=25、ATOM Lite=1のように指定する。
 * `on()` / `off()` / `toggle()` — 全画素を同じ色に設定する。ONは控えめな白
   `RGB8::new(16,16,16)`（フル255は消費電力・眩しさの観点で過剰なため）。
+* `set_ok()` / `set_error()` — メインループの状態表示用。緑`RGB8::new(0,16,0)`/
+  赤`RGB8::new(16,0,0)`を表示する。ATOMIC Motionベースを接続した状態だと
+  シリアルモニタに接続できず（実機の制約）ログでの動作確認ができないため、
+  サーボへのI2C書き込みの成否をLEDの色で判別できるようにしている
+  （[design/motor.md](motor.md)のエラーハンドリング参照）。
 * `show_connecting_animation_frame(step)` — コントローラー接続待機中のアニメーション
   の1フレームを表示する。`matrix`/`lite`のCargo featureで挙動を分岐する。
   * `matrix`（25画素）: `step % 25`番目の画素だけを点灯するマーキー表示。画素の物理的な
@@ -43,8 +49,8 @@ RMT自体は`esp-idf-hal`（`esp_idf_svc::hal::rmt`）にAPIがあるが、タ�
 * `ConnectingAnimation::start(led)` — `Led`の所有権を受け取り、`AtomicBool`の停止フラグを
   共有しつつ`std::thread::spawn`でアニメーションスレッドを開始する。
 * `ConnectingAnimation::stop(self)` — 停止フラグを立てて`JoinHandle::join()`でスレッドの
-  終了を待ち、`Led`の所有権を呼び出し側に返す。`main.rs`はここで受け取った`Led`で
-  改めて`off()`し、通常のメインループに入る。
+  終了を待ち、`Led`の所有権を呼び出し側に返す。`main.rs`はここで受け取った`Led`を
+  通常のメインループでのサーボ状態表示（`set_ok()`/`set_error()`）に使う。
 
 `Led<'a>`は`peripherals.rmt.channel0`/`pins.gpio27`という所有値から構築されるため
 `'a = 'static`に推論され、`thread::spawn`（`'static`境界）の制約を満たす。
@@ -94,6 +100,11 @@ DS4はUSB接続時と同様の簡易フォーマットのまま送ってくる�
 変化したときだけ`buttons changed: ...`をログ出力する（DS4は高頻度で連射してくるため、
 毎フレームログすると`docs/development.md`に記録した通りログ出力自体がCPUを占有して
 ウォッチドッグリセットを招く恐れがあるため、変化時のみに限定している）。
+
+同様に、左右スティックのY値が`STICK_LOG_THRESHOLD`（10）以上変化したときだけ
+`stick moved: left_y=... right_y=...`をログ出力する。スティックのアナログ値は
+ノイズで常に微小変動するため、ボタンのような単純な差分判定（`!=`）だと
+操作していなくてもログが連続して出続けてしまう。そのため閾値判定にしている。
 
 ## `bt_hid.rs` の接続待機ループ
 

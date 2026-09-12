@@ -186,6 +186,10 @@ unsafe extern "C" fn hidh_event_handler(
     }
 }
 
+/// スティックの値がこの幅以上変化したときだけログ出力する（ノイズによる微小変化での
+/// ログ連発を避けるため。詳細は[design/led.md](../../docs/design/led.md)参照）。
+const STICK_LOG_THRESHOLD: i8 = 10;
+
 /// [`GamepadEvent`] を受信して [`GamepadState`] を更新する、DS4用の [`Gamepad`] 実装。
 pub struct Ds4Gamepad {
     rx: Receiver<GamepadEvent>,
@@ -194,6 +198,8 @@ pub struct Ds4Gamepad {
     /// DS4のBT Inputレポートのバイトオフセットが未検証([`ds4_report`]参照)なため、
     /// 最初の数件は生バイト列をログに出して実機での解析確認に使う。
     raw_input_log_budget: u8,
+    /// 直近ログ出力した左右スティックのY値（`STICK_LOG_THRESHOLD`判定用）。
+    last_logged_stick_y: (i8, i8),
 }
 
 impl Ds4Gamepad {
@@ -203,6 +209,7 @@ impl Ds4Gamepad {
             last_state: GamepadState::default(),
             connected: false,
             raw_input_log_budget: 5,
+            last_logged_stick_y: (0, 0),
         }
     }
 
@@ -234,6 +241,19 @@ impl Gamepad for Ds4Gamepad {
                         Some(state) => {
                             if state.buttons != self.last_state.buttons {
                                 log::info!("buttons changed: {:?}", state.buttons);
+                            }
+                            let (last_left_y, last_right_y) = self.last_logged_stick_y;
+                            let left_diff = state.left_stick_y as i16 - last_left_y as i16;
+                            let right_diff = state.right_stick_y as i16 - last_right_y as i16;
+                            if left_diff.abs() >= STICK_LOG_THRESHOLD as i16
+                                || right_diff.abs() >= STICK_LOG_THRESHOLD as i16
+                            {
+                                log::info!(
+                                    "stick moved: left_y={} right_y={}",
+                                    state.left_stick_y,
+                                    state.right_stick_y
+                                );
+                                self.last_logged_stick_y = (state.left_stick_y, state.right_stick_y);
                             }
                             self.last_state = state;
                         }
