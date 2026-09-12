@@ -1,66 +1,118 @@
 //! LEGO に搭載する ESP32-Pico ベースのモーター制御アプリケーション `bud`。
 
 mod gamepad;
+mod led;
 mod motor;
 
 use anyhow::Result;
 use esp_idf_svc::hal::delay::FreeRtos;
-use esp_idf_svc::hal::gpio::{IOPin, PinDriver};
-use esp_idf_svc::hal::ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver};
+use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::hal::prelude::*;
 
-use gamepad::{Gamepad, NullGamepad};
-use motor::{DcMotor, Servo};
+use gamepad::bt_hid::{self, Ds4Gamepad};
+use gamepad::Gamepad;
+use led::Led;
+use motor::AtomicMotion;
 
 /// メインループの周期。
 const LOOP_INTERVAL_MS: u32 = 33;
+
+/// PS4 (DualShock 4) のBluetoothデバイス名。
+const PS4_CONTROLLER_NAME_PREFIX: &str = "Wireless Controller";
+
+/// 未接続時に1回のスキャンで待機する秒数。接続待機ループはこれを繰り返す。
+const SCAN_SECONDS: u32 = 5;
+
+/// ATOM Matrix搭載の5x5 WS2812Cマトリクスの画素数（ATOM Liteの場合は1画素）。
+const LED_PIXEL_COUNT: usize = 25;
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    // DS4接続後、HID Inputレポートの受信頻度に対してBluedroidのACLキューが
+    // 一時的に輻輳し、"ACL queue high watermark"警告が大量に出ることがある。
+    // この警告ログ自体がUART出力（低速）でCPUを占有し、hciTタスクがログ出力に
+    // 詰まって処理に戻れず、タスクウォッチドッグがリセットする実機不具合を確認した。
+    // ログを出さないようにするだけで詰まりが解消するため、該当タグを黙らせる。
+    unsafe {
+        esp_idf_svc::sys::esp_log_level_set(
+            c"BT_HCI".as_ptr(),
+            esp_idf_svc::sys::esp_log_level_t_ESP_LOG_ERROR,
+        );
+        esp_idf_svc::sys::esp_log_level_set(
+            c"BT_BTC".as_ptr(),
+            esp_idf_svc::sys::esp_log_level_t_ESP_LOG_ERROR,
+        );
+    }
+
     let peripherals = Peripherals::take()?;
     let pins = peripherals.pins;
 
-    // LEDC タイマーは 3 チャンネル（左右モーター + サーボ）で共有する。
-    let timer_config = TimerConfig::new().frequency(50.Hz());
-    let timer = LedcTimerDriver::new(peripherals.ledc.timer0, &timer_config)?;
+    // ATOM Matrix v1.1 のGrove(I2C)ポート固定配線。ATOM Liteの場合はSDA=gpio25/SCL=gpio21。
+    let i2c_config = I2cConfig::new().baudrate(100.kHz().into());
+    let i2c = I2cDriver::new(peripherals.i2c0, pins.gpio32, pins.gpio26, &i2c_config)?;
+    let mut motion = AtomicMotion::new(i2c);
 
-    // 配線に合わせて GPIO 番号を変更すること。ESP32-PICO-D4 は内蔵フラッシュ用に
-    // GPIO6〜11 を使用しているため、モーター/サーボの配線には使わない。
-    let mut motor_left = DcMotor::new(
-        LedcDriver::new(peripherals.ledc.channel0, &timer, pins.gpio25)?,
-        PinDriver::output(pins.gpio26.downgrade())?,
-        PinDriver::output(pins.gpio27.downgrade())?,
-    )?;
-    let mut motor_right = DcMotor::new(
-        LedcDriver::new(peripherals.ledc.channel1, &timer, pins.gpio32)?,
-        PinDriver::output(pins.gpio33.downgrade())?,
-        PinDriver::output(pins.gpio14.downgrade())?,
-    )?;
-    let mut arm_servo = Servo::new(LedcDriver::new(peripherals.ledc.channel2, &timer, pins.gpio13)?);
+    // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。
+    let mut led = Led::new(peripherals.rmt.channel0, pins.gpio27, LED_PIXEL_COUNT)?;
 
-    // TB6612FNG 等の STBY ピンを常時有効化する。
-    let mut standby = PinDriver::output(pins.gpio4.downgrade())?;
-    standby.set_high()?;
+    // LED自体(RMT/WS2812駆動)が正しく動作するか、PS4接続やボタン入力と切り離して
+    // 起動時に自己確認できるよう、一度ON/OFFさせる。
+    log::info!("LED self-test: on");
+    led.on()?;
+    FreeRtos::delay_ms(500);
+    log::info!("LED self-test: off");
+    led.off()?;
 
-    // gamepad::bt_hid が PS4 コントローラー接続を実装済みだが、HID Input レポートの
-    // 解析(Gamepad実装への橋渡し)は未実装のため、当面はダミー入力を使う。
-    let mut gamepad = NullGamepad;
+    let rx = bt_hid::init()?;
+    let mut gamepad = Ds4Gamepad::new(rx);
 
-    log::info!("started");
+    log::info!("waiting for PS4 controller (SHARE+PS pairing, or PS button if already paired)...");
+    while !gamepad.is_connected() {
+        bt_hid::scan_and_connect(PS4_CONTROLLER_NAME_PREFIX, SCAN_SECONDS)?;
+        gamepad.poll();
+    }
+    log::info!("PS4 controller connected");
+
+    let mut prev_circle = false;
+    let mut motor_ok = [true; 2];
 
     loop {
         let state = gamepad.poll();
 
-        motor_left.set(state.left_stick_y)?;
-        motor_right.set(state.right_stick_y)?;
-        if state.buttons.cross {
-            arm_servo.set_angle_deg(0.0)?;
-        } else if state.buttons.circle {
-            arm_servo.set_angle_deg(180.0)?;
+        // ATOMIC Motionベース未接続時のI2C NACKや一時的なバス異常は回復可能なエラーとして
+        // 扱い、メインループ（PS4接続・LED制御）自体は継続する
+        // （docs/coding.mdのエラーハンドリング方針）。失敗が続く間毎回ログすると
+        // UART出力でCPUを占有しかねない（実機で確認済みの別件と同じ理由）ため、
+        // 失敗し始め・復帰した時だけログを出す。
+        let motor_speeds = [state.left_stick_y, state.right_stick_y];
+        for (channel, &speed) in motor_speeds.iter().enumerate() {
+            match motion.set_motor_speed(channel as u8, speed) {
+                Ok(()) => {
+                    if !motor_ok[channel] {
+                        log::info!("set_motor_speed({channel}) recovered");
+                        motor_ok[channel] = true;
+                    }
+                }
+                Err(e) => {
+                    if motor_ok[channel] {
+                        log::warn!(
+                            "set_motor_speed({channel}) failed (ATOMIC Motionベース未接続の可能性): {e}"
+                        );
+                        motor_ok[channel] = false;
+                    }
+                }
+            }
         }
+
+        if state.buttons.circle && !prev_circle {
+            if let Err(e) = led.toggle() {
+                log::warn!("led.toggle() failed: {e}");
+            }
+        }
+        prev_circle = state.buttons.circle;
 
         FreeRtos::delay_ms(LOOP_INTERVAL_MS);
     }

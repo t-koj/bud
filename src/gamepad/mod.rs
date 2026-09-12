@@ -19,21 +19,12 @@ pub struct Buttons {
 }
 
 pub mod bt_hid;
+mod ds4_report;
 
 /// コントローラー入力ソースの抽象化。
 ///
-/// 実装は [`bt_hid`] （Bluetooth Classic HID Host 経由で PS4 コントローラーと
-/// 通信するバックエンド）を想定しているが、DualShock 4 の HID Input レポート
-/// 解析は実機で確認してから実装する方針のため、まだ `Gamepad` は実装していない。
+/// 実装は [`bt_hid::Ds4Gamepad`]（Bluetooth Classic HID Host 経由で PS4 コントローラーと
+/// 通信するバックエンド）。
 pub trait Gamepad {
     fn poll(&mut self) -> GamepadState;
-}
-
-/// バックエンド未接続時に使うダミー実装。常に中立状態を返す。
-pub struct NullGamepad;
-
-impl Gamepad for NullGamepad {
-    fn poll(&mut self) -> GamepadState {
-        GamepadState::default()
-    }
 }

@@ -4,50 +4,45 @@
 //! ESP-IDF公式サンプル `examples/bluetooth/esp_hid_host` の `esp_hid_gap` を
 //! vendor したコンポーネント(`components/esp_hid_gap`)経由でバインディングを生成し、
 //! `esp_idf_svc::sys::hid_gap::*` を直接FFI呼び出しする。
-//!
-//! DualShock4のHID Inputレポートのバイト単位パース(ボタン/スティックの構造化)は
-//! 実機で値を確認してから実装する方針とし、ここでは生バイト列をそのままイベントで
-//! 渡すところまでを実装する。
 
 use std::ffi::{c_void, CStr};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
 use std::sync::OnceLock;
 
 use esp_idf_svc::sys::hid_gap::{
-    esp_hid_gap_init, esp_hid_scan, esp_hid_scan_result_t, esp_hid_scan_results_free,
-    esp_hidh_config_t, esp_hidh_dev_name_get, esp_hidh_dev_open, esp_hidh_event_data_t,
-    esp_hidh_event_t_ESP_HIDH_CLOSE_EVENT as ESP_HIDH_CLOSE_EVENT,
+    esp_ble_gattc_register_callback, esp_hid_gap_init, esp_hid_scan, esp_hid_scan_result_t,
+    esp_hid_scan_results_free, esp_hidh_config_t, esp_hidh_dev_name_get, esp_hidh_dev_open,
+    esp_hidh_event_data_t, esp_hidh_event_t_ESP_HIDH_CLOSE_EVENT as ESP_HIDH_CLOSE_EVENT,
     esp_hidh_event_t_ESP_HIDH_INPUT_EVENT as ESP_HIDH_INPUT_EVENT,
-    esp_hidh_event_t_ESP_HIDH_OPEN_EVENT as ESP_HIDH_OPEN_EVENT, esp_hidh_init, HID_HOST_MODE,
+    esp_hidh_event_t_ESP_HIDH_OPEN_EVENT as ESP_HIDH_OPEN_EVENT, esp_hidh_gattc_event_handler,
+    esp_hidh_init, HIDH_BTDM_MODE,
 };
 use esp_idf_svc::sys::{
     esp, nvs_flash_erase, nvs_flash_init, ESP_ERR_NVS_NEW_VERSION_FOUND, ESP_ERR_NVS_NO_FREE_PAGES,
 };
+
+use super::{ds4_report, Gamepad, GamepadState};
 
 /// Bluetooth Classic HID Host から届くイベント。
 #[derive(Debug)]
 pub enum GamepadEvent {
     Connected { name: String },
     Disconnected,
-    /// 生のHID Inputレポート。DualShock4のレポート解析は次のステップで実装する。
+    /// 生のHID Inputレポート。[`ds4_report::parse`] で解析する。
     RawInput { report_id: u16, data: Vec<u8> },
 }
 
 static EVENT_TX: OnceLock<SyncSender<GamepadEvent>> = OnceLock::new();
 
-/// Bluetooth Classic HID Host を初期化し、`target_name_prefix` で始まる名前の
-/// HIDデバイスを `scan_seconds` 秒間探索して見つかれば接続する。
+/// Bluetooth Classic HID Host スタックを初期化する。プロセス中で一度だけ呼び出せる。
 ///
-/// PS4 (DualShock 4) のBluetoothデバイス名は `"Wireless Controller"`。
-/// この関数はプロセス中で一度だけ呼び出せる。
-pub fn init_and_connect(
-    target_name_prefix: &str,
-    scan_seconds: u32,
-) -> anyhow::Result<Receiver<GamepadEvent>> {
+/// 戻り値の `Receiver` で [`GamepadEvent`] を受け取る。実際の探索・接続は
+/// [`scan_and_connect`] を（必要なら繰り返し）呼び出して行う。
+pub fn init() -> anyhow::Result<Receiver<GamepadEvent>> {
     let (tx, rx) = sync_channel(16);
     EVENT_TX
         .set(tx)
-        .map_err(|_| anyhow::anyhow!("bt_hid::init_and_connect is called twice"))?;
+        .map_err(|_| anyhow::anyhow!("bt_hid::init is called twice"))?;
 
     unsafe {
         // Bluedroid はキャリブレーションデータの保存にNVSを使うため、先に初期化しておく。
@@ -58,8 +53,27 @@ pub fn init_and_connect(
         } else {
             esp!(nvs_result)?;
         }
+        log::info!("bt_hid: nvs init done");
 
-        esp!(esp_hid_gap_init(HID_HOST_MODE as u8))?;
+        // esp_hid_gap.h の HID_HOST_MODE は CONFIG_BT_HID_HOST_ENABLED 等の
+        // sdkconfigマクロによる条件分岐で決まるが、bindgenがこれらのマクロを
+        // 認識できず常に HIDH_IDLE_MODE(0) にフォールバックしてしまう
+        // （実機ログで `esp_hid_gap_init` が "Invalid mode given!" で失敗して発覚）。
+        // sdkconfig.defaults で BTDM(Bluetooth Classic + BLE) を有効にしているため、
+        // 無条件で定義されている HIDH_BTDM_MODE を直接指定する。
+        esp!(esp_hid_gap_init(HIDH_BTDM_MODE as u8))?;
+        log::info!("bt_hid: gap init done");
+
+        // esp_hidh_init() は内部でBLE HID Host(GATTC)を初期化する際、
+        // esp_ble_gattc_app_register() の完了イベント(ESP_GATTC_REG_EVT)を
+        // セマフォで待つ(WAIT_CB())。このイベントはGATTCコールバックとして
+        // 事前登録した esp_hidh_gattc_event_handler にしか届かないため、
+        // 登録を忘れるとセマフォが永久に解放されずハングする
+        // （実機ログで esp_hidh_init が返らずハングして発覚。ESP-IDF公式サンプル
+        // esp_hid_host_main.c の esp_hidh_init 呼び出し前の登録に倣う）。
+        esp!(esp_ble_gattc_register_callback(Some(
+            esp_hidh_gattc_event_handler
+        )))?;
 
         let config = esp_hidh_config_t {
             callback: Some(hidh_event_handler),
@@ -67,7 +81,26 @@ pub fn init_and_connect(
             callback_arg: std::ptr::null_mut(),
         };
         esp!(esp_hidh_init(&config))?;
+        log::info!("bt_hid: hidh init done");
+    }
 
+    Ok(rx)
+}
+
+/// `target_name_prefix` で始まる名前のHIDデバイスを `scan_seconds` 秒間探索し、
+/// 見つかれば接続を試みる。
+///
+/// PS4 (DualShock 4) のBluetoothデバイス名は `"Wireless Controller"`。
+/// 接続の成否はこの関数の戻り値ではなく [`GamepadEvent::Connected`] で判定する
+/// （`esp_hidh_dev_open` は接続確立ではなく試行の開始のみを表すため）。
+///
+/// 繰り返し呼び出すことができるため、呼び出し側は「コントローラーの接続を待機する」
+/// （ボンディング済みコントローラーのPSボタン再接続、および未ペアリングコントローラーの
+/// SHARE+PSペアリングモードのどちらも、このスキャンで検出できる想定。実機で要検証）
+/// をこの関数のリトライループとして実装できる。
+pub fn scan_and_connect(target_name_prefix: &str, scan_seconds: u32) -> anyhow::Result<()> {
+    log::info!("bt_hid: scanning for {scan_seconds}s...");
+    unsafe {
         let mut num_results: usize = 0;
         let mut results: *mut esp_hid_scan_result_t = std::ptr::null_mut();
         esp!(esp_hid_scan(scan_seconds, &mut num_results, &mut results))?;
@@ -113,7 +146,7 @@ pub fn init_and_connect(
         }
     }
 
-    Ok(rx)
+    Ok(())
 }
 
 unsafe extern "C" fn hidh_event_handler(
@@ -150,5 +183,70 @@ unsafe extern "C" fn hidh_event_handler(
         });
     } else if id == ESP_HIDH_CLOSE_EVENT {
         let _ = tx.try_send(GamepadEvent::Disconnected);
+    }
+}
+
+/// [`GamepadEvent`] を受信して [`GamepadState`] を更新する、DS4用の [`Gamepad`] 実装。
+pub struct Ds4Gamepad {
+    rx: Receiver<GamepadEvent>,
+    last_state: GamepadState,
+    connected: bool,
+    /// DS4のBT Inputレポートのバイトオフセットが未検証([`ds4_report`]参照)なため、
+    /// 最初の数件は生バイト列をログに出して実機での解析確認に使う。
+    raw_input_log_budget: u8,
+}
+
+impl Ds4Gamepad {
+    pub fn new(rx: Receiver<GamepadEvent>) -> Self {
+        Self {
+            rx,
+            last_state: GamepadState::default(),
+            connected: false,
+            raw_input_log_budget: 5,
+        }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.connected
+    }
+}
+
+impl Gamepad for Ds4Gamepad {
+    fn poll(&mut self) -> GamepadState {
+        loop {
+            match self.rx.try_recv() {
+                Ok(GamepadEvent::Connected { name }) => {
+                    log::info!("gamepad connected: {name}");
+                    self.connected = true;
+                }
+                Ok(GamepadEvent::Disconnected) => {
+                    log::info!("gamepad disconnected");
+                    self.connected = false;
+                    self.last_state = GamepadState::default();
+                }
+                Ok(GamepadEvent::RawInput { report_id, data }) => {
+                    let should_log = self.raw_input_log_budget > 0;
+                    if should_log {
+                        self.raw_input_log_budget -= 1;
+                        log::info!("raw input report_id={report_id:#x} data={data:02x?}");
+                    }
+                    match ds4_report::parse(report_id, &data) {
+                        Some(state) => {
+                            if state.buttons != self.last_state.buttons {
+                                log::info!("buttons changed: {:?}", state.buttons);
+                            }
+                            self.last_state = state;
+                        }
+                        None if should_log => {
+                            log::warn!("unrecognized report_id={report_id:#x} len={}", data.len());
+                        }
+                        None => {}
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        self.last_state
     }
 }

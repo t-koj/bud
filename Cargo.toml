@@ -21,6 +21,12 @@ opt-level = "z"
 log = "0.4"
 anyhow = "1"
 esp-idf-svc = { version = "0.51", default-features = true }
+smart-leds = "0.4"
+
+# ATOM Matrix/Lite のオンボードWS2812/SK6812 LEDをRMT経由で駆動する。
+# esp-idf-hal 0.45.2 / esp-idf-sys 0.36.1 (Cargo.lock) に適合するのはこのバージョンのみ
+# (0.14系以降はesp-idf-hal ^0.46を要求し、意図しない依存更新を招くため固定する)。
+ws2812-esp32-rmt-driver = { version = "=0.13.1", features = ["smart-leds-trait"] }
 
 [build-dependencies]
 embuild = "0.33"
