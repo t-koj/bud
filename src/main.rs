@@ -91,34 +91,28 @@ fn main() -> Result<()> {
     led.off()?;
     log::info!("PS4 controller connected");
 
-    let mut prev_circle = false;
-    let mut motor_ok = [true; 2];
+    // S1(channel 0)は左スティック上下、S3(channel 2)は右スティック上下に割り当てる。
+    let mut servo_ok = [true; 2];
 
     loop {
         let state = gamepad.poll();
-        let motor_speeds = [state.left_stick_y, state.right_stick_y];
-        for (channel, &speed) in motor_speeds.iter().enumerate() {
-            if !motor_ok[channel] {
+        let servo_targets = [(0u8, state.left_stick_y), (2u8, state.right_stick_y)];
+        for (idx, &(channel, stick)) in servo_targets.iter().enumerate() {
+            if !servo_ok[idx] {
                 continue;
             }
 
-            match motion.set_motor_speed(channel as u8, speed) {
+            let angle = motor::stick_to_servo_angle(stick);
+            match motion.set_servo_angle(channel, angle) {
                 Ok(()) => {}
                 Err(e) => {
                     log::warn!(
-                        "set_motor_speed({channel}) failed (ATOMIC Motionベース未接続の可能性): {e}"
+                        "set_servo_angle({channel}) failed (ATOMIC Motionベース未接続の可能性): {e}"
                     );
-                    motor_ok[channel] = false;
+                    servo_ok[idx] = false;
                 }
             }
         }
-
-        if state.buttons.circle && !prev_circle {
-            if let Err(e) = led.toggle() {
-                log::warn!("led.toggle() failed: {e}");
-            }
-        }
-        prev_circle = state.buttons.circle;
 
         FreeRtos::delay_ms(LOOP_INTERVAL_MS);
     }

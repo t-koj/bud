@@ -46,6 +46,8 @@ impl<'a> Led<'a> {
         Ok(())
     }
 
+    /// 現時点ではどのボタンにも割り当てていない（`main.rs`未使用）ため警告を抑止する。
+    #[allow(dead_code)]
     pub fn toggle(&mut self) -> Result<()> {
         if self.is_on {
             self.off()

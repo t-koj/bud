@@ -25,16 +25,16 @@ impl<'a> AtomicMotion<'a> {
     /// DCモーター速度を設定する。`channel` は 0 か 1。
     /// `speed` は -100（全力後退）〜100（全力前進）
     /// （デバイス上限は-127〜127だが、本プロジェクトのスティック入力規約に合わせる）。
+    ///
+    /// 現時点ではどのスティック/ボタンにも割り当てていない（`main.rs`未使用）ため、
+    /// DCモーター制御自体の実装([spec.md](../../docs/spec.md)の機能要件)を残しつつ警告を抑止する。
+    #[allow(dead_code)]
     pub fn set_motor_speed(&mut self, channel: u8, speed: i8) -> Result<()> {
         let speed = speed.clamp(-100, 100);
         self.write_register(motor_speed_register(channel)?, speed as u8)
     }
 
     /// サーボ角度を設定する。`channel` は 0〜3。`angle_deg` は 0.0〜180.0度。
-    ///
-    /// 現時点ではどのボタンにも割り当てていない（`main.rs`未使用）ため、
-    /// サーボ制御自体の実装([spec.md](../../docs/spec.md)の機能要件)を残しつつ警告を抑止する。
-    #[allow(dead_code)]
     pub fn set_servo_angle(&mut self, channel: u8, angle_deg: f32) -> Result<()> {
         let angle = angle_deg.clamp(0.0, 180.0) as u8;
         self.write_register(servo_angle_register(channel)?, angle)
@@ -63,6 +63,12 @@ fn servo_angle_register(channel: u8) -> Result<u8> {
     Ok(channel)
 }
 
+/// スティック値(-100〜100)をサーボ角度(0.0〜180.0度)に変換する。
+/// -100→0度、0→90度（中央）、100→180度に線形マッピングする。
+pub fn stick_to_servo_angle(stick: i8) -> f32 {
+    (stick as f32 + 100.0) / 200.0 * 180.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +85,12 @@ mod tests {
         assert_eq!(servo_angle_register(0).unwrap(), 0x00);
         assert_eq!(servo_angle_register(3).unwrap(), 0x03);
         assert!(servo_angle_register(4).is_err());
+    }
+
+    #[test]
+    fn stick_to_servo_angle_maps_stick_range_to_angle_range() {
+        assert_eq!(stick_to_servo_angle(-100), 0.0);
+        assert_eq!(stick_to_servo_angle(0), 90.0);
+        assert_eq!(stick_to_servo_angle(100), 180.0);
     }
 }

@@ -3,8 +3,10 @@
 ## 概要
 
 ATOM Matrix/Lite のオンボードRGB LED（GPIO27固定配線、ATOM Matrixは5x5 WS2812Cの
-25画素マトリクス、ATOM Liteは単色1画素）を、PS4コントローラーの○(Circle)ボタンで
-ON/OFFトグルする。
+25画素マトリクス、ATOM Liteは単色1画素）を制御する。現在`main.rs`で使っているのは
+コントローラー接続待機中のアニメーション表示と、接続完了時の消灯のみ（`on()`/`off()`）。
+○(Circle)ボタンによるON/OFFトグル（`toggle()`）はAPIとして実装済みだが、現時点では
+どのボタンにも割り当てていない（[spec.md](../spec.md)参照）。
 
 ## ライブラリ選定
 
@@ -47,17 +49,14 @@ RMT自体は`esp-idf-hal`（`esp_idf_svc::hal::rmt`）にAPIがあるが、タ�
 `Led<'a>`は`peripherals.rmt.channel0`/`pins.gpio27`という所有値から構築されるため
 `'a = 'static`に推論され、`thread::spawn`（`'static`境界）の制約を満たす。
 
-## ○ボタンのエッジ検出
+## ○ボタンによるLEDトグルの割り当てについて
 
-コントローラーのボタンは「押されている間true」の状態のみ届くため、`main.rs`の
-メインループで前回フレームの状態(`prev_circle`)を保持し、`circle && !prev_circle`
-（立ち上がりエッジ）でのみ`toggle()`を呼ぶ。これにより押しっぱなしで連続トグル
-しないようにしている。
-
-既存の「○ボタンでサーボを180度にする」「×ボタンでサーボを0度にする」というデモ実装
-（仕様書に無いスキャフォールドコード）は削除した。サーボ制御自体（`AtomicMotion::
-set_servo_angle`）は[spec.md](../spec.md)の機能要件のためAPIとして残しているが、
-現時点ではどのボタンにも割り当てていない。
+以前は`main.rs`のメインループで、コントローラーのボタンが「押されている間true」の状態
+のみ届く性質を踏まえ、前回フレームの状態(`prev_circle`)を保持して`circle &&
+!prev_circle`（立ち上がりエッジ）でのみ`toggle()`を呼ぶ実装だった（押しっぱなしで
+連続トグルしないため）。現在は左右スティックをサーボ制御（[design/motor.md]
+(motor.md)参照）に割り当てたため、この○ボタン割り当ては削除し、`toggle()`は
+現時点でどのボタンにも割り当てていないAPIとして残している。
 
 ## DS4 Bluetooth Classic HID Input レポートの解析 (`src/gamepad/ds4_report.rs`)
 
