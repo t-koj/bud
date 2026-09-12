@@ -54,9 +54,40 @@ impl<'a> Led<'a> {
         }
     }
 
+    /// コントローラー接続待機中のアニメーションの1フレームを表示する。
+    /// `step`はフレームを追うごとに1ずつ増える通し番号。
+    ///
+    /// ATOM MatrixとATOM Liteとで搭載LED数が異なり単色点滅では間延びするため、
+    /// Matrixは1画素ずつ点灯位置をずらす（マーキー）、Liteは単純な点滅にする。
+    pub fn show_connecting_animation_frame(&mut self, step: u32) -> Result<()> {
+        #[cfg(feature = "matrix")]
+        let pixels = marquee_frame(step, self.pixel_count);
+        #[cfg(feature = "lite")]
+        let pixels = blink_frame(step);
+
+        self.driver.write(pixels.into_iter())?;
+        Ok(())
+    }
+
     fn write(&mut self, color: RGB8) -> Result<()> {
         self.driver
             .write(std::iter::repeat(color).take(self.pixel_count))?;
         Ok(())
     }
+}
+
+/// ATOM Matrix向け: 点灯位置を1画素ずつ順送りするマーキー表示。
+/// 画素の物理的な配置（配線順）は未確認のため、配線順インデックスをそのまま使う。
+#[cfg(feature = "matrix")]
+fn marquee_frame(step: u32, pixel_count: usize) -> Vec<RGB8> {
+    let lit = step as usize % pixel_count;
+    (0..pixel_count)
+        .map(|i| if i == lit { ON_COLOR } else { OFF_COLOR })
+        .collect()
+}
+
+/// ATOM Lite向け: 単色LED1個での点滅表示。
+#[cfg(feature = "lite")]
+fn blink_frame(step: u32) -> Vec<RGB8> {
+    vec![if step % 2 == 0 { ON_COLOR } else { OFF_COLOR }]
 }
