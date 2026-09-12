@@ -1,5 +1,13 @@
 //! LEGO に搭載する ESP32-Pico ベースのモーター制御アプリケーション `bud`。
 
+#[cfg(not(any(feature = "matrix", feature = "lite")))]
+compile_error!(
+    "feature \"matrix\" か \"lite\" のどちらか一方を指定してください（例: cargo build --features matrix）"
+);
+
+#[cfg(all(feature = "matrix", feature = "lite"))]
+compile_error!("feature \"matrix\" と \"lite\" は同時に指定できません");
+
 mod gamepad;
 mod led;
 mod motor;
@@ -24,18 +32,12 @@ const PS4_CONTROLLER_NAME_PREFIX: &str = "Wireless Controller";
 /// 未接続時に1回のスキャンで待機する秒数。接続待機ループはこれを繰り返す。
 const SCAN_SECONDS: u32 = 5;
 
-/// ATOM Matrix搭載の5x5 WS2812Cマトリクスの画素数（ATOM Liteの場合は1画素）。
-const LED_PIXEL_COUNT: usize = 25;
-
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    // DS4接続後、HID Inputレポートの受信頻度に対してBluedroidのACLキューが
-    // 一時的に輻輳し、"ACL queue high watermark"警告が大量に出ることがある。
-    // この警告ログ自体がUART出力（低速）でCPUを占有し、hciTタスクがログ出力に
-    // 詰まって処理に戻れず、タスクウォッチドッグがリセットする実機不具合を確認した。
-    // ログを出さないようにするだけで詰まりが解消するため、該当タグを黙らせる。
+    // DS4接続直後に ACL キューが一時的に輻輳し、"ACL queue high watermark" 警告が多発する。
+    // このログが UART 出力で CPU を占有し、watchdog で再起動するため、影響タグの出力を抑止する。
     unsafe {
         esp_idf_svc::sys::esp_log_level_set(
             c"BT_HCI".as_ptr(),
@@ -50,13 +52,26 @@ fn main() -> Result<()> {
     let peripherals = Peripherals::take()?;
     let pins = peripherals.pins;
 
-    // ATOM Matrix v1.1 のGrove(I2C)ポート固定配線。ATOM Liteの場合はSDA=gpio25/SCL=gpio21。
+    // ATOM Matrix/Lite はGPIO配線が異なるため、ビルド時に指定したfeatureで固定する
+    // （main.rs冒頭のcompile_error!によりmatrix/liteのどちらか一方の指定を必須にしている）。
+    #[cfg(feature = "matrix")]
+    let (i2c_sda, i2c_scl, led_pixel_count) = {
+        log::info!("ATOM model: Matrix (GPIO32/SDA, GPIO26/SCL)");
+        (pins.gpio32, pins.gpio26, 25)
+    };
+    #[cfg(feature = "lite")]
+    let (i2c_sda, i2c_scl, led_pixel_count) = {
+        log::info!("ATOM model: Lite (GPIO25/SDA, GPIO21/SCL)");
+        (pins.gpio25, pins.gpio21, 1)
+    };
+
+    // ATOM Matrix/Lite の I2C 配線はモデルごとに固定されているため、ここで切り替える。
     let i2c_config = I2cConfig::new().baudrate(100.kHz().into());
-    let i2c = I2cDriver::new(peripherals.i2c0, pins.gpio32, pins.gpio26, &i2c_config)?;
+    let i2c = I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c_config)?;
     let mut motion = AtomicMotion::new(i2c);
 
-    // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。
-    let mut led = Led::new(peripherals.rmt.channel0, pins.gpio27, LED_PIXEL_COUNT)?;
+    // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。LEDの画素数は機種に応じて切り替える。
+    let mut led = Led::new(peripherals.rmt.channel0, pins.gpio27, led_pixel_count)?;
 
     // LED自体(RMT/WS2812駆動)が正しく動作するか、PS4接続やボタン入力と切り離して
     // 起動時に自己確認できるよう、一度ON/OFFさせる。
@@ -81,17 +96,6 @@ fn main() -> Result<()> {
 
     loop {
         let state = gamepad.poll();
-
-        // ATOMIC Motionベース未接続時のI2C NACKや一時的なバス異常は回復可能なエラーとして
-        // 扱い、メインループ（PS4接続・LED制御）自体は継続する
-        // （docs/coding.mdのエラーハンドリング方針）。
-        //
-        // 未接続のI2Cバスへの書き込みはタイムアウトするまでメインループ全体をブロックする
-        // ため、失敗したチャンネルは以降二度と再試行しない。ATOMIC Motionベースは起動時に
-        // 配線されているかどうかで決まり、実行中に後から接続されることは無いため、初回の
-        // 書き込みで確立しなければ以降も回復する見込みが無く、毎フレーム（または間引いても
-        // 定期的に）再試行することはPS4コントローラーの入力ポーリング
-        // （gamepad.poll()の呼び出し頻度）を無駄に落とすだけだった。
         let motor_speeds = [state.left_stick_y, state.right_stick_y];
         for (channel, &speed) in motor_speeds.iter().enumerate() {
             if !motor_ok[channel] {

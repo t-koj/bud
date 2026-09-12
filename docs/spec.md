@@ -34,8 +34,9 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
 
 * モーター/サーボの実際の配線（GPIO 番号）。[開発環境](development.md) の
   ピン配置は仮のもので、実機の配線に合わせて変更する
-* 対象ボードは ATOM Matrix v1.1 に決定（[開発環境](development.md) 参照）。
-  ATOM Lite を使う場合はI2CのGPIO番号が異なる点に注意する。
+* ATOM Matrix / ATOM Lite はGPIO配線が異なるため、実行時判別ではなくCargo feature
+  (`matrix`/`lite`)によるビルド時選択で切り替える（[開発環境](development.md) 参照）。
+  デフォルトfeatureは設定しておらず、指定し忘れはビルドエラーになる。
 * DS4 の Bluetooth Classic HID Input レポートは、当初想定していた Report ID `0x11`
   拡張レポートではなく、実機では Report ID `0x01` の9バイト簡易レポートが届くことを
   実機ログで確認し、パース処理を修正済み。詳細は [design/led.md](design/led.md) 参照。

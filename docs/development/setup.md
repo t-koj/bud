@@ -19,16 +19,20 @@
    cargo install ldproxy espflash
    ```
 
-3. ビルドする（初回は ESP-IDF がワークスペース配下に自動取得される）
+3. ビルドする（初回は ESP-IDF がワークスペース配下に自動取得される）。
+   ATOM Matrix/Lite でGPIO配線が異なるため、`--features matrix` または
+   `--features lite` を必ず指定する（指定しないとコンパイルエラーになる。
+   詳細: [development.md](../development.md)）。
 
    ```sh
-   cargo build
+   cargo build --features matrix   # ATOM Matrixの場合
+   cargo build --features lite     # ATOM Liteの場合
    ```
 
 4. 書き込み・モニタする
 
    ```sh
-   cargo run
+   cargo run --features matrix
    ```
 
    ESP32-Pico ボードを USB(シリアル変換経由)で接続すると `/dev/cu.usbserial-*`

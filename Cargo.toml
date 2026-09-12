@@ -10,6 +10,14 @@ rust-version = "1.82"
 name = "bud"
 harness = false # 組み込みのcargo testハーネスを使わない -> rust-analyzerのエラーを解消
 
+# ATOM Matrix/Lite はGPIO配線が異なるため、ビルド時にどちらか一方を明示的に指定する。
+# デフォルトfeatureは意図的に設定していない（指定し忘れて誤った機種向けに
+# ビルドしてしまう事故を防ぐため）。
+# 例: cargo build --features matrix / cargo build --features lite
+[features]
+matrix = []
+lite = []
+
 [profile.release]
 opt-level = "s"
 

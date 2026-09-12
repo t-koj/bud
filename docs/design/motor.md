@@ -34,10 +34,12 @@ DCモーター・サーボは同一のI2Cバス上の1デバイスであるた�
 `servo_angle_register`）に切り出し、`#[cfg(test)]`でテストしている
 （I2Cハードウェア自体の動作は実機なしでは検証できない。[testing.md](../testing.md)参照）。
 
-## GPIO配線（ATOM Matrix v1.1）
+## GPIO配線（ATOM Matrix v1.1 / ATOM Lite）
 
-* I2C: SDA=GPIO32, SCL=GPIO26（Groveポート固定配線）
-* ATOM Lite の場合はSDA=GPIO25, SCL=GPIO21となり異なる（[development.md](../development.md)参照）
+* ATOM Matrix: I2C SDA=GPIO32, SCL=GPIO26（Groveポート固定配線）
+* ATOM Lite: I2C SDA=GPIO25, SCL=GPIO21
+* どちらの配線を使うかはCargo feature (`matrix`/`lite`) でビルド時に選択する
+  （[development.md](../development.md)参照）
 
 ## エラーハンドリング
 
