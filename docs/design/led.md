@@ -88,11 +88,21 @@ while !gamepad.is_connected() {
 
 のようにリトライループとして呼び出すことで「コントローラーの接続を待機する」を実現する。
 登録済みコントローラーのPSボタン再接続と、未登録コントローラーのSHARE+PSペアリングの
-どちらも`esp_hid_scan`で検出できるという想定で実装しているが、実機での検証が必要。
+どちらも`esp_hid_scan`で検出できることは実機で確認済み。
+
+### 接続待機の高速化（BLEスキャンフェーズの無効化）
+
+`esp_hid_scan`（`components/esp_hid_gap/esp_hid_gap.c`）は本来、BLE HIDデバイス
+探索用のBLEスキャンを`seconds`秒、続けてClassic BTデバイス探索用のスキャンを
+`seconds`秒実行する（呼び出し1回あたり合計約2倍の待ち時間）。DS4はBluetooth Classic
+のみでBLE広告を行わないため、BLEスキャンは実機ログ上も毎回対象0件で終わっており、
+起動〜コントローラー接続完了までの時間を不必要に伸ばしていた。この待ち時間短縮のため、
+`esp_hid_scan`のBLEスキャンフェーズを無効化し、Classic BTスキャンのみを実行するように
+`components/esp_hid_gap/esp_hid_gap.c`を変更した。これにより`scan_and_connect`
+1回あたりの待ち時間がほぼ半分になる。
 
 ## 未検証事項
 
-* 登録済み/未登録どちらのコントローラーも同じ`scan_and_connect`ループで接続できるか
 * WS2812C 5x5マトリクスがRMT ch0/GPIO27でちらつき無く光るか
   （公式ドキュメントにはWi-Fi/Bluetooth使用時にちらつく既知の問題が記載されており、
   必要ならRMTのmem_block_numを増やす対応を検討する）

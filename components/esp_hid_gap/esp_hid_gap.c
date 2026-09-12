@@ -676,7 +676,9 @@ static esp_ble_scan_params_t hid_scan_params = {
     .scan_duplicate         = BLE_SCAN_DUPLICATE_ENABLE,
 };
 
-static esp_err_t start_ble_scan(uint32_t seconds)
+// bud: esp_hid_scan()からは呼ばれなくなったが(上記コメント参照)、既存の
+// esp_hid_ble_gap_adv_init()等と対称な位置に残しておくため関数自体は削除しない。
+__attribute__((unused)) static esp_err_t start_ble_scan(uint32_t seconds)
 {
     esp_err_t ret = ESP_OK;
     if ((ret = esp_ble_gap_set_scan_params(&hid_scan_params)) != ESP_OK) {
@@ -1147,21 +1149,11 @@ esp_err_t esp_hid_scan(uint32_t seconds, size_t *num_results, esp_hid_scan_resul
         return ESP_FAIL;
     }
 
-#if CONFIG_BT_BLE_ENABLED
-    if (start_ble_scan(seconds) == ESP_OK) {
-        WAIT_BLE_CB();
-    } else {
-        return ESP_FAIL;
-    }
-#endif /* CONFIG_BT_BLE_ENABLED */
-#if CONFIG_BT_NIMBLE_ENABLED
-    if (start_nimble_scan(seconds) == ESP_OK) {
-        WAIT_BLE_CB();
-    } else {
-        return ESP_FAIL;
-    }
-#endif /* CONFIG_BT_BLE_ENABLED */
-
+    // bud: 接続対象はDS4（Bluetooth Classic HIDデバイス）のみで、BLE HIDデバイスは
+    // 使用しないため、BLEスキャンフェーズ（本来BLE HIDデバイス探索用）は行わない。
+    // 元の実装はBLEスキャンとClassic BTスキャンを順に`seconds`秒ずつ実行するため、
+    // 呼び出しごとの待ち時間がほぼ倍になり、起動〜コントローラー接続完了までの時間が
+    // 不必要に長くなっていた（実機ログでBLEスキャンが常に対象0件で終わることを確認）。
 
 #if CONFIG_BT_HID_HOST_ENABLED
     if (start_bt_scan(seconds) == ESP_OK) {

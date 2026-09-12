@@ -84,25 +84,27 @@ fn main() -> Result<()> {
 
         // ATOMIC Motionベース未接続時のI2C NACKや一時的なバス異常は回復可能なエラーとして
         // 扱い、メインループ（PS4接続・LED制御）自体は継続する
-        // （docs/coding.mdのエラーハンドリング方針）。失敗が続く間毎回ログすると
-        // UART出力でCPUを占有しかねない（実機で確認済みの別件と同じ理由）ため、
-        // 失敗し始め・復帰した時だけログを出す。
+        // （docs/coding.mdのエラーハンドリング方針）。
+        //
+        // 未接続のI2Cバスへの書き込みはタイムアウトするまでメインループ全体をブロックする
+        // ため、失敗したチャンネルは以降二度と再試行しない。ATOMIC Motionベースは起動時に
+        // 配線されているかどうかで決まり、実行中に後から接続されることは無いため、初回の
+        // 書き込みで確立しなければ以降も回復する見込みが無く、毎フレーム（または間引いても
+        // 定期的に）再試行することはPS4コントローラーの入力ポーリング
+        // （gamepad.poll()の呼び出し頻度）を無駄に落とすだけだった。
         let motor_speeds = [state.left_stick_y, state.right_stick_y];
         for (channel, &speed) in motor_speeds.iter().enumerate() {
+            if !motor_ok[channel] {
+                continue;
+            }
+
             match motion.set_motor_speed(channel as u8, speed) {
-                Ok(()) => {
-                    if !motor_ok[channel] {
-                        log::info!("set_motor_speed({channel}) recovered");
-                        motor_ok[channel] = true;
-                    }
-                }
+                Ok(()) => {}
                 Err(e) => {
-                    if motor_ok[channel] {
-                        log::warn!(
-                            "set_motor_speed({channel}) failed (ATOMIC Motionベース未接続の可能性): {e}"
-                        );
-                        motor_ok[channel] = false;
-                    }
+                    log::warn!(
+                        "set_motor_speed({channel}) failed (ATOMIC Motionベース未接続の可能性): {e}"
+                    );
+                    motor_ok[channel] = false;
                 }
             }
         }

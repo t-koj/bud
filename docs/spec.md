@@ -47,3 +47,6 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
   `components/esp_hid_gap/Kconfig.projbuild`で`CONFIG_EXAMPLE_SSP_ENABLED=y`を
   明示的に定義している（[design/led.md](design/led.md)、
   `components/esp_hid_gap/README.md`参照）。
+* 起動〜コントローラー接続完了までの待ち時間短縮のため、`esp_hid_scan`のBLEスキャン
+  フェーズ（DS4はBluetooth Classicのみで使わない）を無効化済み。詳細は
+  [design/led.md](design/led.md)参照。
