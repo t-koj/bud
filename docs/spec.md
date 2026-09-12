@@ -30,7 +30,8 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
 
 ### メインループ
 
-* ○(Circle)ボタン押下でLEDをON/OFFトグルする（押しっぱなしで連続トグルしない）。
+* 左スティック上下でサーボ(S1, channel 0)の角度を、右スティック上下でサーボ(S3, channel 2)
+  の角度を操作する。
 
 ## 未確定の項目
 
@@ -53,3 +54,7 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
 * 起動〜コントローラー接続完了までの待ち時間短縮のため、`esp_hid_scan`のBLEスキャン
   フェーズ（DS4はBluetooth Classicのみで使わない）を無効化済み。詳細は
   [design/led.md](design/led.md)参照。
+* ATOMIC Motionベースのサーボチャンネルは、M5Stack公式のラベル表記(S1〜S4)とコード上の
+  `channel`番号(0〜3)が対応する（S1=0, S2=1, S3=2, S4=3）。DCモーター制御・LEDトグルは
+  実装済みだが現時点ではどのスティック/ボタンにも割り当てていない
+  （[design/motor.md](design/motor.md)、[design/led.md](design/led.md)参照）。
