@@ -74,14 +74,7 @@ fn main() -> Result<()> {
 
     // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。LEDの画素数は機種に応じて切り替える。
     let mut led = Led::new(peripherals.rmt.channel0, pins.gpio27, led_pixel_count)?;
-
-    // LED自体(RMT/WS2812駆動)が正しく動作するか、PS4接続やボタン入力と切り離して
-    // 起動時に自己確認できるよう、一度ON/OFFさせる。
-    log::info!("LED self-test: on");
     led.on()?;
-    FreeRtos::delay_ms(500);
-    log::info!("LED self-test: off");
-    led.off()?;
 
     let rx = bt_hid::init()?;
     let mut gamepad = Ds4Gamepad::new(rx);
