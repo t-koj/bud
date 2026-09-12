@@ -8,6 +8,7 @@ compile_error!(
 #[cfg(all(feature = "matrix", feature = "lite"))]
 compile_error!("feature \"matrix\" と \"lite\" は同時に指定できません");
 
+mod connecting_animation;
 mod gamepad;
 mod led;
 mod motor;
@@ -18,6 +19,7 @@ use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::hal::prelude::*;
 
+use connecting_animation::ConnectingAnimation;
 use gamepad::bt_hid::{self, Ds4Gamepad};
 use gamepad::Gamepad;
 use led::Led;
@@ -85,10 +87,15 @@ fn main() -> Result<()> {
     let mut gamepad = Ds4Gamepad::new(rx);
 
     log::info!("waiting for PS4 controller (SHARE+PS pairing, or PS button if already paired)...");
+    // scan_and_connectは1回あたり数秒ブロックするため、待機中はLEDアニメーションを
+    // 別スレッドに任せる。
+    let animation = ConnectingAnimation::start(led);
     while !gamepad.is_connected() {
         bt_hid::scan_and_connect(PS4_CONTROLLER_NAME_PREFIX, SCAN_SECONDS)?;
         gamepad.poll();
     }
+    let mut led = animation.stop()?;
+    led.off()?;
     log::info!("PS4 controller connected");
 
     let mut prev_circle = false;

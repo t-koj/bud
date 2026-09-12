@@ -24,6 +24,28 @@ RMT自体は`esp-idf-hal`（`esp_idf_svc::hal::rmt`）にAPIがあるが、タ�
   画素数は呼び出し側（`main.rs`）でATOM Matrix=25、ATOM Lite=1のように指定する。
 * `on()` / `off()` / `toggle()` — 全画素を同じ色に設定する。ONは控えめな白
   `RGB8::new(16,16,16)`（フル255は消費電力・眩しさの観点で過剰なため）。
+* `show_connecting_animation_frame(step)` — コントローラー接続待機中のアニメーション
+  の1フレームを表示する。`matrix`/`lite`のCargo featureで挙動を分岐する。
+  * `matrix`（25画素）: `step % 25`番目の画素だけを点灯するマーキー表示。画素の物理的な
+    配置（配線順）は未確認のため、配線順インデックスをそのまま使っている
+    （[spec.md](../spec.md)の未確定の項目参照）。
+  * `lite`（1画素）: `step`の偶奇でON/OFFする単純な点滅。
+
+## `ConnectingAnimation` 型 (`src/connecting_animation.rs`)
+
+`bt_hid::scan_and_connect`（`esp_hid_scan`のFFI呼び出し）は1回あたり`SCAN_SECONDS`秒
+ブロックするため、`main.rs`の接続待機ループ内で毎フレーム`Led`を更新してもアニメーション
+にならない。そこで`Led`の所有権を専用スレッドに渡し、`FRAME_INTERVAL_MS`(150ms)周期で
+`show_connecting_animation_frame`を呼び続けることでアニメーションを実現している。
+
+* `ConnectingAnimation::start(led)` — `Led`の所有権を受け取り、`AtomicBool`の停止フラグを
+  共有しつつ`std::thread::spawn`でアニメーションスレッドを開始する。
+* `ConnectingAnimation::stop(self)` — 停止フラグを立てて`JoinHandle::join()`でスレッドの
+  終了を待ち、`Led`の所有権を呼び出し側に返す。`main.rs`はここで受け取った`Led`で
+  改めて`off()`し、通常のメインループに入る。
+
+`Led<'a>`は`peripherals.rmt.channel0`/`pins.gpio27`という所有値から構築されるため
+`'a = 'static`に推論され、`thread::spawn`（`'static`境界）の制約を満たす。
 
 ## ○ボタンのエッジ検出
 
