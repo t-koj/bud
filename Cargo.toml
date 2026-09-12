@@ -1,0 +1,34 @@
+[package]
+name = "bud"
+version = "0.1.0"
+authors = ["t-koj <t@kvi.jp>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.82"
+
+[[bin]]
+name = "bud"
+harness = false # 組み込みのcargo testハーネスを使わない -> rust-analyzerのエラーを解消
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true    # フラッシュ容量への影響は小さく、デバッグ情報は残す
+opt-level = "z"
+
+[dependencies]
+log = "0.4"
+anyhow = "1"
+esp-idf-svc = { version = "0.51", default-features = true }
+
+[build-dependencies]
+embuild = "0.33"
+
+# Bluetooth Classic HID Host (esp_hidh) の GAP/SDP 初期化・スキャン処理。
+# esp-idf-svc/esp-idf-hal に相当するRust APIが無いため、ESP-IDF公式サンプル
+# examples/bluetooth/esp_hid_host の esp_hid_gap をvendorし、bindgenでバインディングを生成する。
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/esp_hid_gap"]
+bindings_header = "components/esp_hid_gap/bindings.h"
+bindings_module = "hid_gap"

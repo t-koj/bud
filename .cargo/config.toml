@@ -1,0 +1,19 @@
+[build]
+target = "xtensa-esp32-espidf"
+
+[target.'cfg(target_os = "espidf")']
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = [ "--cfg",  "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32"
+ESP_IDF_VERSION = "release/v5.3"
+ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
+
+# CARGO_TARGET_DIR等でビルドディレクトリを移動した場合はコメントを外す。
+# embuildの制約によりCARGO_WORKSPACE_DIRの明示が必要になる。
+#CARGO_WORKSPACE_DIR = { value = "", relative = true }
