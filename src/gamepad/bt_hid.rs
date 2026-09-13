@@ -80,6 +80,7 @@ pub fn init() -> anyhow::Result<Receiver<GamepadEvent>> {
         // esp_hid_gapが内部で使うGAPコールバックの登録を奪わずBT GAPイベントを
         // 監視するため、汎用フック経由で相乗りする（[`gap_event_hook`]参照）。
         esp_hid_gap_set_event_hook(Some(gap_event_hook));
+        log::info!("bt_hid: gap event hook registered");
 
         // esp_hidh_init() は内部でBLE HID Host(GATTC)を初期化する際、
         // esp_ble_gattc_app_register() の完了イベント(ESP_GATTC_REG_EVT)を
@@ -176,9 +177,15 @@ pub fn scan_and_connect(target_name_prefix: &str, scan_seconds: u32) -> anyhow::
 /// （実機で確認済み）。この関数は登録の奪い合いが起きないフック機構
 /// （`esp_hid_gap_set_event_hook`）経由で呼ばれるため安全。
 unsafe extern "C" fn gap_event_hook(event: esp_bt_gap_cb_event_t, _param: *mut esp_bt_gap_cb_param_t) {
+    log::info!("gap_event_hook: event={event}");
     if event == esp_bt_gap_cb_event_t_ESP_BT_GAP_MODE_CHG_EVT {
-        if let Some(tx) = EVENT_TX.get() {
-            let _ = tx.try_send(GamepadEvent::LinkReady);
+        match EVENT_TX.get() {
+            Some(tx) => {
+                if let Err(e) = tx.try_send(GamepadEvent::LinkReady) {
+                    log::warn!("gap_event_hook: LinkReady try_send failed: {e:?}");
+                }
+            }
+            None => log::warn!("gap_event_hook: EVENT_TX not set"),
         }
     }
 }
