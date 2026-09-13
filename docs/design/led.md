@@ -35,7 +35,7 @@ RMT自体は`esp-idf-hal`（`esp_idf_svc::hal::rmt`）にAPIがあるが、タ�
   （[design/motor.md](motor.md)のエラーハンドリング参照）。
 * `set_preparing()` — 青`RGB8::new(0,0,16)`を表示する。コントローラー接続完了直後、
   Bluetoothスタックのリンクポリシー・ネゴシエーションが完了する（後述の
-  `bt_hid::is_ready_for_operation()`がtrueになる）までの間に表示する
+  `Ds4Gamepad::is_operation_ready()`がtrueになる）までの間に表示する
   （下記「接続完了後のBluetoothスタックネゴシエーション待ち」参照）。
 * `show_connecting_animation_frame(step)` — コントローラー接続待機中のアニメーション
   の1フレームを表示する。`matrix`/`lite`のCargo featureで挙動を分岐する。
@@ -150,18 +150,32 @@ ESP-IDF Bluedroidスタックが接続後にリンクポリシー（sniffモー�
 公式なKconfig/APIはESP-IDFに存在しないため、アプリ側はこのイベントの受信を
 「実際に操作可能になった」の目安として扱う方針にした。
 
-`components/esp_hid_gap/esp_hid_gap.c`の`bt_gap_event_handler`（`ESP_BT_GAP_MODE_CHG_EVT`
-ケース）で、このイベントを一度でも受信したら`atomic_bool`のフラグを立てるようにし、
-`esp_hid_gap_mode_chg_received()`（`esp_hid_gap.h`で宣言）として公開した。
-`bindings.h`が`esp_hid_gap.h`をincludeしているためbindgenが自動でRustバインディングを
-生成し、`bt_hid::is_ready_for_operation()`（`src/gamepad/bt_hid.rs`）がこれを
-ラップしてアプリから使えるようにしている。
+この検知には`components/esp_hid_gap`（vendorしたESP-IDF公式サンプル）を変更せず、
+Rust側（`src/gamepad/bt_hid.rs`）から標準ESP-IDF APIの`esp_bt_gap_register_callback`
+を直接呼び出す方式を採用した。`ESP_BT_GAP_MODE_CHG_EVT`等のBT GAP標準API自体は
+ESP-IDF本体の`bt`コンポーネントが持つAPIであり、`esp_idf_svc::sys::*`から
+`components/esp_hid_gap`を介さず直接使える（vendorが必要なのは`esp_hid_scan`や
+`esp_hidh_init`などESP-IDF公式サンプル固有の関数のみ）。
 
-`main.rs`のメインループでは、`operation_ready`フラグが立つまで（＝
-`is_ready_for_operation()`がtrueになるまで）`Led::set_preparing()`（青）を表示し、
-サーボの正常/異常表示（`set_ok()`/`set_error()`）より優先する。イベントが
-何らかの理由で届かない場合に備え、接続後`OPERATION_READY_TIMEOUT_MS`(45秒)で
-タイムアウトし、警告ログを出した上で通常表示に切り替えるフォールバックを設けている。
+ただし`esp_bt_gap_register_callback`はコールバックを1つしか保持できず、
+`components/esp_hid_gap`が`esp_hid_gap_init()`内でスキャン・ペアリング処理
+（PIN/SSP応答、探索結果処理）用に自分のコールバックを既に登録している。
+ここでRust側が無条件に登録し直すとその処理を上書きしてしまうため、
+本プロジェクトが「HIDデバイス接続確立後は再スキャン・再ペアリングを行わない」
+設計であることを踏まえ、**接続確立後（`GamepadEvent::Connected`送出時）に限って**
+`register_link_ready_gap_callback()`（`src/gamepad/bt_hid.rs`）が上書き登録する
+方式にした。これにより`components/esp_hid_gap`は一切変更せずに済んでいる。
+
+登録したコールバックは`ESP_BT_GAP_MODE_CHG_EVT`受信時に`GamepadEvent::LinkReady`を
+既存のイベントチャネル（`Connected`/`Disconnected`/`RawInput`と同じ`mpsc`チャネル）
+に送出し、`Ds4Gamepad::poll()`がこれを受けて`operation_ready`内部状態を立て、
+`Ds4Gamepad::is_operation_ready()`で参照できるようにしている。
+
+`main.rs`のメインループでは、`gamepad.is_operation_ready()`がtrueになるまで
+`Led::set_preparing()`（青）を表示し、サーボの正常/異常表示（`set_ok()`/`set_error()`）
+より優先する。イベントが何らかの理由で届かない場合に備え、接続後
+`OPERATION_READY_TIMEOUT_MS`(45秒)でタイムアウトし、警告ログを出した上で
+通常表示に切り替えるフォールバックを設けている。
 
 なお、メインループ自体（サーボへのスティック入力反映）はこのフラグの状態に関わらず
 常時動作させている。本対応はLED表示（ユーザーへのフィードバック）のみを対象とし、

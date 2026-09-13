@@ -27,8 +27,6 @@
 #define HID_HOST_MODE HIDH_IDLE_MODE
 #endif
 
-#include <stdbool.h>
-
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -86,11 +84,6 @@ typedef struct esp_hidh_scan_result_s {
 
 esp_err_t esp_hid_gap_init(uint8_t mode);
 esp_err_t esp_hid_gap_deinit(void);
-
-// ESP_BT_GAP_MODE_CHG_EVT を一度でも受信していれば true を返す。
-// Bluedroidスタックが接続後にリンクポリシー（sniffモード等）のネゴシエーションを
-// 完了させたタイミングの目安として、アプリ側で「実際に操作可能になった」判定に使う。
-bool esp_hid_gap_mode_chg_received(void);
 
 esp_err_t esp_hid_scan(uint32_t seconds, size_t *num_results, esp_hid_scan_result_t **results);
 void esp_hid_scan_results_free(esp_hid_scan_result_t *results);
