@@ -39,11 +39,19 @@ const SCAN_SECONDS: u32 = 5;
 /// サーボへのI2C書き込みが失敗した際、次に再試行するまでのフレーム数。
 const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
 
-/// サーボチャンネル(0〜3 = S1〜S4)ごとのニュートラル点トリム（度）。
-/// S1(0)/S3(2)は180度サーボのため0.0のままでよい。S2(1)/S4(3)は360度連続回転
-/// サーボで、実際の停止点が90度からずれている個体があるため、スティック中央で
-/// 回転が止まるように実機で調整する（詳細は[design/motor.md](../docs/design/motor.md)参照）。
+/// サーボチャンネル(0〜3 = S1〜S4)のうち、360度連続回転サーボが接続されている
+/// チャンネル（S2, S4）を示す。180度（位置決め）サーボのS1/S3は角度レジスタ、
+/// 連続回転サーボのS2/S4はPWMパルス幅レジスタで制御する（[design/motor.md](../docs/design/motor.md)参照）。
+const CONTINUOUS_ROTATION_CHANNEL: [bool; 4] = [false, true, false, true];
+
+/// S1(0)/S3(2)（180度サーボ）用のニュートラル点トリム（度）。90度からずれていても
+/// 実害がないため通常は0.0のままでよい。
 const SERVO_NEUTRAL_TRIM_DEG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+
+/// S2(1)/S4(3)（360度連続回転サーボ）用のニュートラル点トリム（マイクロ秒）。
+/// 実際の停止点が1500us(90度相当)からずれている個体があるため、スティック中央で
+/// 回転が止まるように実機で調整する（詳細は[design/motor.md](../docs/design/motor.md)参照）。
+const SERVO_NEUTRAL_TRIM_US: [i16; 4] = [0, 0, 0, 0];
 
 /// コントローラー接続後、`gamepad.is_operation_ready()`がtrueになるまでの
 /// 待ち時間の上限（ミリ秒）。BluedroidスタックのSniffモード遷移イベントは接続後
@@ -140,20 +148,24 @@ fn main() -> Result<()> {
                 continue;
             }
 
-            let angle = motor::stick_to_servo_angle_with_trim(
-                motor::apply_stick_deadzone(stick),
-                SERVO_NEUTRAL_TRIM_DEG[idx],
-            );
-            match motion.set_servo_angle(channel, angle) {
+            let stick = motor::apply_stick_deadzone(stick);
+            let write_result = if CONTINUOUS_ROTATION_CHANNEL[idx] {
+                let pulse = motor::stick_to_servo_pulse_with_trim(stick, SERVO_NEUTRAL_TRIM_US[idx]);
+                motion.set_servo_pulse_width(channel, pulse)
+            } else {
+                let angle = motor::stick_to_servo_angle_with_trim(stick, SERVO_NEUTRAL_TRIM_DEG[idx]);
+                motion.set_servo_angle(channel, angle)
+            };
+            match write_result {
                 Ok(()) => {
                     if servo_error[idx] {
-                        log::info!("set_servo_angle({channel}) recovered (angle={angle})");
+                        log::info!("servo channel {channel} recovered");
                     }
                     servo_error[idx] = false;
                 }
                 Err(e) => {
                     log::warn!(
-                        "set_servo_angle({channel}, angle={angle}) failed (ATOMIC Motionベース未接続の可能性): {e}"
+                        "servo channel {channel} write failed (ATOMIC Motionベース未接続の可能性): {e}"
                     );
                     servo_error[idx] = true;
                     servo_retry_countdown[idx] = SERVO_RETRY_INTERVAL_FRAMES;
