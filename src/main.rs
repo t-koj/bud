@@ -57,38 +57,27 @@ fn main() -> Result<()> {
     let peripherals = Peripherals::take()?;
     let pins = peripherals.pins;
 
-    // ATOM Matrix/Lite はGPIO配線が異なるため、ビルド時に指定したfeatureで固定する
-    // （main.rs冒頭のcompile_error!によりmatrix/liteのどちらか一方の指定を必須にしている）。
+    // ATOM Matrix/Lite はオンボードLEDの画素数が異なるため、ビルド時に指定したfeatureで
+    // 固定する（main.rs冒頭のcompile_error!によりmatrix/liteのどちらか一方の指定を
+    // 必須にしている）。
     #[cfg(feature = "matrix")]
-    let (i2c_sda, i2c_scl, led_pixel_count) = {
-        log::info!("ATOM model: Matrix (GPIO32/SDA, GPIO26/SCL)");
-        (pins.gpio32, pins.gpio26, 25)
+    let led_pixel_count = {
+        log::info!("ATOM model: Matrix");
+        25
     };
     #[cfg(feature = "lite")]
-    let (i2c_sda, i2c_scl, led_pixel_count) = {
-        log::info!("ATOM model: Lite (GPIO25/SDA, GPIO21/SCL)");
-        (pins.gpio25, pins.gpio21, 1)
+    let led_pixel_count = {
+        log::info!("ATOM model: Lite");
+        1
     };
 
-    // ATOM Matrix/Lite の I2C 配線はモデルごとに固定されているため、ここで切り替える。
+    // ATOMIC Motionベースとの接続はATOM Matrix/Lite共通でG25(SDA)/G21(SCL)固定
+    // （M5Stack公式ドキュメント参照）。ATOM MatrixのGroveポート配線(GPIO32/26)を
+    // 使うと誤って想定していたが、ATOMICシリーズの拡張ベースは底面のHY2.0-4P
+    // スタッキングコネクタ経由で接続され、機種に依らずG25/G21固定であることが
+    // 実機のI2Cバス全アドレススキャン（応答皆無）を受けて判明した。
     let i2c_config = I2cConfig::new().baudrate(100.kHz().into());
-    let mut i2c = I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c_config)?;
-
-    // ATOMIC Motionベース(I2Cアドレス0x38)への書き込みが実機で常に失敗する問題の
-    // 切り分けのため、起動時にI2Cバス上の全アドレスをスキャンし応答の有無をログに残す。
-    // 原因判明後は削除する想定の一時的な診断コード。
-    let mut i2c_scan_found = Vec::new();
-    for addr in 1u8..=127 {
-        if i2c.write(addr, &[], 20).is_ok() {
-            i2c_scan_found.push(addr);
-        }
-    }
-    if i2c_scan_found.is_empty() {
-        log::warn!("I2C scan: no device responded (配線/電源/プルアップの可能性)");
-    } else {
-        log::info!("I2C scan: device(s) found at {i2c_scan_found:#04x?}");
-    }
-
+    let i2c = I2cDriver::new(peripherals.i2c0, pins.gpio25, pins.gpio21, &i2c_config)?;
     let mut motion = AtomicMotion::new(i2c);
 
     // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。LEDの画素数は機種に応じて切り替える。

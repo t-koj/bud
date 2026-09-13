@@ -26,26 +26,32 @@
   呼び出している。`cargo build` でのビルド成功は確認済み（`cargo test`は
   ハードウェア接続が必要なため未検証。[testing.md](testing.md)参照）。
 
-### GPIO割り当て（ATOM Matrix v1.1 / ATOM Lite、暫定）
+### GPIO割り当て（ATOM Matrix v1.1 / ATOM Lite）
 
 ATOM Matrix/ATOM Lite ともESP32-Pico-D4を使用しており、内蔵フラッシュ用に
 GPIO6〜11を使用しているため、それ以外の用途には使わない。
 
-ATOM Matrix と ATOM Lite はGPIO配線が異なるため、Cargo feature (`matrix`/`lite`)
-でビルド時に指定する（`src/main.rs`冒頭の`compile_error!`によりどちらか一方の
-指定を必須にしている。デフォルトfeatureは無いので指定し忘れはコンパイルエラーに
-なる）。
+Cargo feature (`matrix`/`lite`) はオンボードLEDの画素数の切り替えにのみ使う
+（`src/main.rs`冒頭の`compile_error!`によりどちらか一方の指定を必須にしている。
+デフォルトfeatureは無いので指定し忘れはコンパイルエラーになる）。
 
 ```sh
 cargo build --features matrix   # ATOM Matrix向け
 cargo build --features lite     # ATOM Lite向け
 ```
 
-| 用途 | GPIO (matrix) | GPIO (lite) | 備考 |
-| --- | --- | --- | --- |
-| I2C SDA (ATOMIC Motionベースへ) | GPIO32 | GPIO25 | Groveポート固定配線 |
-| I2C SCL (ATOMIC Motionベースへ) | GPIO26 | GPIO21 | 同上 |
-| オンボードRGB LED (WS2812C, RMT) | GPIO27 | GPIO27 | ATOM Matrix/Lite共通の固定配線 |
+| 用途 | GPIO | 備考 |
+| --- | --- | --- |
+| I2C SDA (ATOMIC Motionベースへ) | GPIO25 | ATOM Matrix/Lite共通。底面のHY2.0-4Pスタッキングコネクタ固定配線 |
+| I2C SCL (ATOMIC Motionベースへ) | GPIO21 | 同上 |
+| オンボードRGB LED (WS2812C, RMT) | GPIO27 | ATOM Matrix/Lite共通の固定配線 |
+| LED画素数 | Matrix: 25 / Lite: 1 | Cargo feature (`matrix`/`lite`) で切り替え |
+
+当初「ATOM MatrixはGroveポート配線のGPIO32/26を使う」と誤って想定していたが、
+ATOMIC Motionベースは底面のHY2.0-4Pスタッキングコネクタ経由で接続され、
+機種に依らずSDA=GPIO25/SCL=GPIO21固定であることがM5Stack公式ドキュメントと
+実機のI2Cバス全アドレススキャン（GPIO32/26では応答が一つも無かった）で判明した
+（詳細: [design/motor.md](design/motor.md)）。
 
 以前のTB6612FNG等のGPIO直結ドライバIC想定の配線（GPIO25/33/14/13/4等）は、実機の
 ATOMIC MotionベースがI2C制御のボードだったため廃止した
