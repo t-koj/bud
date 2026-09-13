@@ -40,18 +40,23 @@ const SCAN_SECONDS: u32 = 5;
 const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
 
 /// サーボチャンネル(0〜3 = S1〜S4)のうち、360度連続回転サーボが接続されている
-/// チャンネル（S2, S4）を示す。180度（位置決め）サーボのS1/S3は角度レジスタ、
-/// 連続回転サーボのS2/S4はPWMパルス幅レジスタで制御する（[design/motor.md](../docs/design/motor.md)参照）。
+/// チャンネル（S2, S4）を示す。位置決めサーボのS1/S3は目標角度を直接送るが、
+/// 連続回転サーボのS2/S4は急激な角度変化でサーボの反応が不安定になる現象が
+/// 実機で観測されたため、[`SERVO_ANGLE_STEP_LIMIT_DEG`]でなめらかに追従させる
+/// （[design/motor.md](../docs/design/motor.md)参照）。
 const CONTINUOUS_ROTATION_CHANNEL: [bool; 4] = [false, true, false, true];
 
-/// S1(0)/S3(2)（180度サーボ）用のニュートラル点トリム（度）。90度からずれていても
-/// 実害がないため通常は0.0のままでよい。
+/// サーボチャンネル(0〜3 = S1〜S4)ごとのニュートラル点トリム（度）。S1(0)/S3(2)
+/// （180度サーボ）は90度からずれていても実害がないため通常は0.0のままでよい。
+/// S2(1)/S4(3)（360度連続回転サーボ）は実際の停止点が90度からずれている個体が
+/// あるため、スティック中央で回転が止まるように実機で調整する
+/// （詳細は[design/motor.md](../docs/design/motor.md)参照）。
 const SERVO_NEUTRAL_TRIM_DEG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
-/// S2(1)/S4(3)（360度連続回転サーボ）用のニュートラル点トリム（マイクロ秒）。
-/// 実際の停止点が1500us(90度相当)からずれている個体があるため、スティック中央で
-/// 回転が止まるように実機で調整する（詳細は[design/motor.md](../docs/design/motor.md)参照）。
-const SERVO_NEUTRAL_TRIM_US: [i16; 4] = [0, 0, 0, 0];
+/// 360度連続回転サーボ（[`CONTINUOUS_ROTATION_CHANNEL`]）で、1フレーム
+/// （`LOOP_INTERVAL_MS`）あたりに変化させる最大角度（度）。実機での最適値は未調整
+/// のため要チューニング（詳細は[design/motor.md](../docs/design/motor.md)参照）。
+const SERVO_ANGLE_STEP_LIMIT_DEG: f32 = 15.0;
 
 /// コントローラー接続後、`gamepad.is_operation_ready()`がtrueになるまでの
 /// 待ち時間の上限（ミリ秒）。BluedroidスタックのSniffモード遷移イベントは接続後
@@ -127,6 +132,10 @@ fn main() -> Result<()> {
     let mut servo_retry_countdown = [0u32; 4];
     let mut servo_error = [false; 4];
 
+    // 360度連続回転サーボ(S2/S4)へ送る、なめらかに追従させた角度の現在値
+    // （[`SERVO_ANGLE_STEP_LIMIT_DEG`]参照）。180度サーボ(S1/S3)では使わない。
+    let mut ramped_angle_deg = [90.0f32; 4];
+
     // 接続直後はBluetoothスタックのリンクポリシー・ネゴシエーションが未完了で、
     // 実際の操作が安定しない期間があるため、それを示す専用のLED表示を挟む。
     let mut operation_ready = false;
@@ -149,14 +158,19 @@ fn main() -> Result<()> {
             }
 
             let stick = motor::apply_stick_deadzone(stick);
-            let write_result = if CONTINUOUS_ROTATION_CHANNEL[idx] {
-                let pulse = motor::stick_to_servo_pulse_with_trim(stick, SERVO_NEUTRAL_TRIM_US[idx]);
-                motion.set_servo_pulse_width(channel, pulse)
+            let target_angle =
+                motor::stick_to_servo_angle_with_trim(stick, SERVO_NEUTRAL_TRIM_DEG[idx]);
+            let angle = if CONTINUOUS_ROTATION_CHANNEL[idx] {
+                ramped_angle_deg[idx] = motor::ramp_toward(
+                    ramped_angle_deg[idx],
+                    target_angle,
+                    SERVO_ANGLE_STEP_LIMIT_DEG,
+                );
+                ramped_angle_deg[idx]
             } else {
-                let angle = motor::stick_to_servo_angle_with_trim(stick, SERVO_NEUTRAL_TRIM_DEG[idx]);
-                motion.set_servo_angle(channel, angle)
+                target_angle
             };
-            match write_result {
+            match motion.set_servo_angle(channel, angle) {
                 Ok(()) => {
                     if servo_error[idx] {
                         log::info!("servo channel {channel} recovered");
