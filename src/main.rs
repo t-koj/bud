@@ -72,7 +72,23 @@ fn main() -> Result<()> {
 
     // ATOM Matrix/Lite の I2C 配線はモデルごとに固定されているため、ここで切り替える。
     let i2c_config = I2cConfig::new().baudrate(100.kHz().into());
-    let i2c = I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c_config)?;
+    let mut i2c = I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &i2c_config)?;
+
+    // ATOMIC Motionベース(I2Cアドレス0x38)への書き込みが実機で常に失敗する問題の
+    // 切り分けのため、起動時にI2Cバス上の全アドレスをスキャンし応答の有無をログに残す。
+    // 原因判明後は削除する想定の一時的な診断コード。
+    let mut i2c_scan_found = Vec::new();
+    for addr in 1u8..=127 {
+        if i2c.write(addr, &[], 20).is_ok() {
+            i2c_scan_found.push(addr);
+        }
+    }
+    if i2c_scan_found.is_empty() {
+        log::warn!("I2C scan: no device responded (配線/電源/プルアップの可能性)");
+    } else {
+        log::info!("I2C scan: device(s) found at {i2c_scan_found:#04x?}");
+    }
+
     let mut motion = AtomicMotion::new(i2c);
 
     // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。LEDの画素数は機種に応じて切り替える。
