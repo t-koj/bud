@@ -37,9 +37,12 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
 
 ## 未確定の項目
 
-* モーター/サーボの実際の配線（GPIO 番号）。[開発環境](development.md) の
-  ピン配置は仮のもので、実機の配線に合わせて変更する
-* ATOM Matrix / ATOM Lite はGPIO配線が異なるため、実行時判別ではなくCargo feature
+* ATOMIC Motionベースとの接続は、ATOM Matrix/Lite共通でSDA=GPIO25, SCL=GPIO21固定
+  （M5Stack公式ドキュメントで確認済み。詳細は[開発環境](development.md)、
+  [design/motor.md](design/motor.md)参照）。当初ATOM MatrixはGroveポート配線
+  (GPIO32/26)を使うと誤って想定していたため、実機でサーボが動作しない問題が
+  発生していたが修正済み。
+* ATOM Matrix / ATOM Lite はオンボードLEDの画素数が異なるため、Cargo feature
   (`matrix`/`lite`)によるビルド時選択で切り替える（[開発環境](development.md) 参照）。
   デフォルトfeatureは設定しておらず、指定し忘れはビルドエラーになる。
 * DS4 の Bluetooth Classic HID Input レポートは、当初想定していた Report ID `0x11`
