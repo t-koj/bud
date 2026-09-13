@@ -13,6 +13,8 @@ mod gamepad;
 mod led;
 mod motor;
 
+use std::time::Instant;
+
 use anyhow::Result;
 use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
@@ -116,6 +118,8 @@ fn main() -> Result<()> {
     let mut operation_ready_wait_ms: u32 = 0;
 
     loop {
+        let loop_start = Instant::now();
+
         let state = gamepad.poll();
         let servo_targets = [(0u8, state.left_stick_y), (2u8, state.right_stick_y)];
         for (idx, &(channel, stick)) in servo_targets.iter().enumerate() {
@@ -167,6 +171,9 @@ fn main() -> Result<()> {
             log::warn!("led status update failed: {e}");
         }
 
-        FreeRtos::delay_ms(LOOP_INTERVAL_MS);
+        // 処理に要した時間を差し引いた残り時間だけ待機し、ループ周期をLOOP_INTERVAL_MSに
+        // 近づける（処理時間が周期を超えた場合は待機せず即座に次周期へ進む）。
+        let elapsed_ms = loop_start.elapsed().as_millis() as u32;
+        FreeRtos::delay_ms(LOOP_INTERVAL_MS.saturating_sub(elapsed_ms));
     }
 }
