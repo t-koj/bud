@@ -10,9 +10,10 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
 use std::sync::OnceLock;
 
 use esp_idf_svc::sys::hid_gap::{
-    esp_ble_gattc_register_callback, esp_hid_gap_init, esp_hid_scan, esp_hid_scan_result_t,
-    esp_hid_scan_results_free, esp_hidh_config_t, esp_hidh_dev_name_get, esp_hidh_dev_open,
-    esp_hidh_event_data_t, esp_hidh_event_t_ESP_HIDH_CLOSE_EVENT as ESP_HIDH_CLOSE_EVENT,
+    esp_ble_gattc_register_callback, esp_hid_gap_init, esp_hid_gap_mode_chg_received,
+    esp_hid_scan, esp_hid_scan_result_t, esp_hid_scan_results_free, esp_hidh_config_t,
+    esp_hidh_dev_name_get, esp_hidh_dev_open, esp_hidh_event_data_t,
+    esp_hidh_event_t_ESP_HIDH_CLOSE_EVENT as ESP_HIDH_CLOSE_EVENT,
     esp_hidh_event_t_ESP_HIDH_INPUT_EVENT as ESP_HIDH_INPUT_EVENT,
     esp_hidh_event_t_ESP_HIDH_OPEN_EVENT as ESP_HIDH_OPEN_EVENT, esp_hidh_gattc_event_handler,
     esp_hidh_init, HIDH_BTDM_MODE,
@@ -147,6 +148,17 @@ pub fn scan_and_connect(target_name_prefix: &str, scan_seconds: u32) -> anyhow::
     }
 
     Ok(())
+}
+
+/// BluedroidスタックがGAPイベント`ESP_BT_GAP_MODE_CHG_EVT`を一度でも受信していればtrue。
+///
+/// これは接続後にリンクポリシー（sniffモード等）のネゴシエーションが完了したことを示す
+/// スタック内部の通知で、`components/esp_hid_gap`が受信のたびにフラグを立てている。
+/// 接続直後の約30秒間はこのイベントが届く前でHID入力が実質的に安定しないため、
+/// アプリ側で「実際に操作可能になった」とみなす目安として使う
+/// （[docs/design/led.md](../../docs/design/led.md)参照）。
+pub fn is_ready_for_operation() -> bool {
+    unsafe { esp_hid_gap_mode_chg_received() }
 }
 
 unsafe extern "C" fn hidh_event_handler(

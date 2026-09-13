@@ -4,7 +4,8 @@
 
 ATOM Matrix/Lite のオンボードRGB LED（GPIO27固定配線、ATOM Matrixは5x5 WS2812Cの
 25画素マトリクス、ATOM Liteは単色1画素）を制御する。現在`main.rs`で使っているのは
-コントローラー接続待機中のアニメーション表示と、接続完了後のメインループでの
+コントローラー接続待機中のアニメーション表示、接続完了直後のBluetoothスタック
+ネゴシエーション待ち表示（`set_preparing()`）、接続完了後のメインループでの
 状態表示（`set_ok()`/`set_error()`。[design/motor.md](motor.md)のサーボ書き込み
 成否と連動する）。○(Circle)ボタンによるON/OFFトグル（`toggle()`）はAPIとして
 実装済みだが、現時点ではどのボタンにも割り当てていない（[spec.md](../spec.md)参照）。
@@ -32,6 +33,10 @@ RMT自体は`esp-idf-hal`（`esp_idf_svc::hal::rmt`）にAPIがあるが、タ�
   シリアルモニタに接続できず（実機の制約）ログでの動作確認ができないため、
   サーボへのI2C書き込みの成否をLEDの色で判別できるようにしている
   （[design/motor.md](motor.md)のエラーハンドリング参照）。
+* `set_preparing()` — 青`RGB8::new(0,0,16)`を表示する。コントローラー接続完了直後、
+  Bluetoothスタックのリンクポリシー・ネゴシエーションが完了する（後述の
+  `bt_hid::is_ready_for_operation()`がtrueになる）までの間に表示する
+  （下記「接続完了後のBluetoothスタックネゴシエーション待ち」参照）。
 * `show_connecting_animation_frame(step)` — コントローラー接続待機中のアニメーション
   の1フレームを表示する。`matrix`/`lite`のCargo featureで挙動を分岐する。
   * `matrix`（25画素）: `step % 25`番目の画素だけを点灯するマーキー表示。画素の物理的な
@@ -133,6 +138,35 @@ while !gamepad.is_connected() {
 `components/esp_hid_gap/esp_hid_gap.c`を変更した。これにより`scan_and_connect`
 1回あたりの待ち時間がほぼ半分になる。
 
+## 接続完了後のBluetoothスタックネゴシエーション待ち表示
+
+実機で、コントローラー接続完了ログ(`"PS4 controller connected"`)から実際に
+操作可能になるまで約25秒の空白があり、その間はコントローラー入力を送っても
+反応しない現象が確認された。ログを調べたところ、この間にBT GAP
+`ESP_BT_GAP_MODE_CHG_EVT`（`mode:2` = `ESP_BT_PM_MD_SNIFF`）が発生しており、
+ESP-IDF Bluedroidスタックが接続後にリンクポリシー（sniffモード等）の
+ネゴシエーションを内部タイマー（`bta_api.h`の`BTA_DM_PM_HH_OPEN_DELAY`、約30秒）
+で自動的に行っていることが判明した。このタイマーやイベント自体を無効化・制御する
+公式なKconfig/APIはESP-IDFに存在しないため、アプリ側はこのイベントの受信を
+「実際に操作可能になった」の目安として扱う方針にした。
+
+`components/esp_hid_gap/esp_hid_gap.c`の`bt_gap_event_handler`（`ESP_BT_GAP_MODE_CHG_EVT`
+ケース）で、このイベントを一度でも受信したら`atomic_bool`のフラグを立てるようにし、
+`esp_hid_gap_mode_chg_received()`（`esp_hid_gap.h`で宣言）として公開した。
+`bindings.h`が`esp_hid_gap.h`をincludeしているためbindgenが自動でRustバインディングを
+生成し、`bt_hid::is_ready_for_operation()`（`src/gamepad/bt_hid.rs`）がこれを
+ラップしてアプリから使えるようにしている。
+
+`main.rs`のメインループでは、`operation_ready`フラグが立つまで（＝
+`is_ready_for_operation()`がtrueになるまで）`Led::set_preparing()`（青）を表示し、
+サーボの正常/異常表示（`set_ok()`/`set_error()`）より優先する。イベントが
+何らかの理由で届かない場合に備え、接続後`OPERATION_READY_TIMEOUT_MS`(45秒)で
+タイムアウトし、警告ログを出した上で通常表示に切り替えるフォールバックを設けている。
+
+なお、メインループ自体（サーボへのスティック入力反映）はこのフラグの状態に関わらず
+常時動作させている。本対応はLED表示（ユーザーへのフィードバック）のみを対象とし、
+制御ロジックの開始タイミングを遅延させるものではない。
+
 ## RMTバッファ不足によるマーキー表示の乱れ対策
 
 実機で、接続待機中のマーキー表示が先頭の画素は正常だが途中からランダムに
@@ -160,3 +194,6 @@ refillの頻度が減ることで遅延に対する猶予が増える。
 * DS4 Report ID `0x01`のbyte[5]〜byte[8]（L1/R1/L2/R2/Share/Options/L3/R3、PS/Touchpad、
   L2/R2アナログ値）は実機ログで存在は確認したがビット位置までは未検証
   （本プロジェクトでは現状Square/Cross/Circle/Triangleとスティックのみ使用）。
+* `ESP_BT_GAP_MODE_CHG_EVT`の受信タイミングが実際に「コントローラー操作が有効になる
+  タイミング」と厳密に一致するかは未検証（実機ログ上の相関から採用した目安であり、
+  因果関係を確認したものではない）。
