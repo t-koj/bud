@@ -86,25 +86,21 @@ pub fn stick_to_servo_angle_with_trim(stick: i8, trim_deg: f32) -> f32 {
     (stick_to_servo_angle(stick) + trim_deg).clamp(0.0, 180.0)
 }
 
-/// `current`から`target`へ向けて、1フレームあたり最大`max_step_deg`度だけ変化させた
-/// 値を返す（差が`max_step_deg`以下ならそのまま`target`を返す）。
+/// 目標角度`target_deg`が、直近に実際に送信した角度`last_sent_deg`から
+/// `threshold_deg`度以上変化しているかどうかを返す。
 ///
-/// 実機で、360度連続回転サーボ(S2/S4)へスティックの大きな傾き（中央から端まで一気に
-/// 変化する値）をそのまま送ると、サーボが数百ms〜1秒程度の周期でしか反応せず、
-/// ぎくしゃくと回転する現象が観測された。180度サーボ(S1/S3)と360度サーボは同じ
-/// SG90系のPWM仕様（50Hz/0.5〜2.5ms）を持つ同種の回路と考えられ、レジスタや
-/// PWM値域を変えても症状が変わらなかったことから、サーボ側のアナログ制御回路が
-/// 急激なPWM変化に追従できず不安定になっている可能性が高いと判断した。目標値へ
-/// 一気に飛ばさずなめらかに追従させることで、この不安定さを回避する狙い。
-pub fn ramp_toward(current: f32, target: f32, max_step_deg: f32) -> f32 {
-    let diff = target - current;
-    if diff.abs() <= max_step_deg {
-        target
-    } else if diff > 0.0 {
-        current + max_step_deg
-    } else {
-        current - max_step_deg
-    }
+/// 180度（位置決め）サーボは目標角度に到達するまでモーターを駆動し続ける
+/// フィードバック機構を持つ。スティック入力のわずかなノイズ等で毎フレーム
+/// 目標角度が微小に変化し続けると、サーボが一度も目標に到達・静定できず
+/// モーターが駆動し続け（機械的にはロックに近い持続的な高負荷状態になり）、
+/// 安価なサーボの簡易的な過熱・過電流保護が働いて一定周期（実機で観測: 約1秒）
+/// でしか反応しなくなる現象が観測された。360度連続回転サーボは目標角度に
+/// 到達するという概念自体が無い（フィードバックが無効化され、PWM値がそのまま
+/// 速度になるだけ）ためこの問題が起きない。
+///
+/// 微小な変化では実際の書き込みを行わずサーボを静定させることで、この問題を防ぐ。
+pub fn exceeds_send_threshold(last_sent_deg: f32, target_deg: f32, threshold_deg: f32) -> bool {
+    (target_deg - last_sent_deg).abs() >= threshold_deg
 }
 
 /// スティックの「遊び」（デッドゾーン）幅。中央からこの範囲内の入力は0として扱う。
@@ -195,14 +191,14 @@ mod tests {
     }
 
     #[test]
-    fn ramp_toward_reaches_target_when_within_max_step() {
-        assert_eq!(ramp_toward(90.0, 95.0, 10.0), 95.0);
-        assert_eq!(ramp_toward(90.0, 90.0, 10.0), 90.0);
+    fn exceeds_send_threshold_false_for_small_change() {
+        assert!(!exceeds_send_threshold(90.0, 91.0, 2.0));
+        assert!(!exceeds_send_threshold(90.0, 90.0, 2.0));
     }
 
     #[test]
-    fn ramp_toward_clamps_to_max_step_when_target_far() {
-        assert_eq!(ramp_toward(90.0, 180.0, 10.0), 100.0);
-        assert_eq!(ramp_toward(90.0, 0.0, 10.0), 80.0);
+    fn exceeds_send_threshold_true_for_large_change() {
+        assert!(exceeds_send_threshold(90.0, 92.0, 2.0));
+        assert!(exceeds_send_threshold(90.0, 88.0, 2.0));
     }
 }
