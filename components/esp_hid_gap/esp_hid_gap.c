@@ -32,6 +32,15 @@
 
 static const char *TAG = "ESP_HID_GAP";
 
+#if !CONFIG_BT_NIMBLE_ENABLED
+static void (*s_gap_event_hook)(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) = NULL;
+
+void esp_hid_gap_set_event_hook(void (*hook)(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param))
+{
+    s_gap_event_hook = hook;
+}
+#endif
+
 // uncomment to print all devices that were seen during a scan
 #define GAP_DBG_PRINTF(...) printf(__VA_ARGS__)
 
@@ -468,6 +477,10 @@ static void handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst)
 
 static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 {
+    if (s_gap_event_hook != NULL) {
+        s_gap_event_hook(event, param);
+    }
+
     switch (event) {
     case ESP_BT_GAP_DISC_STATE_CHANGED_EVT: {
         ESP_LOGV(TAG, "BT GAP DISC_STATE %s", (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED) ? "START" : "STOP");

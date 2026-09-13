@@ -5,27 +5,30 @@
 //! vendor したコンポーネント(`components/esp_hid_gap`)経由でバインディングを生成し、
 //! `esp_idf_svc::sys::hid_gap::*` を直接FFI呼び出しする。
 //!
-//! BT GAPの標準API（`esp_bt_gap_register_callback`等）はESP-IDF本体の`bt`
-//! コンポーネントが標準で持つAPIのため、vendorしたコンポーネントを介さず
-//! `esp_idf_svc::sys::*`から直接使える（[`register_link_ready_gap_callback`]参照）。
+//! BT GAPイベント（`ESP_BT_GAP_MODE_CHG_EVT`等）の監視は、`esp_bt_gap_register_callback`
+//! を直接呼ばず、`components/esp_hid_gap`に追加した汎用フック
+//! `esp_hid_gap_set_event_hook`経由で行う。`esp_bt_gap_register_callback`は
+//! コールバックを1つしか保持できず、`esp_hid_gap`が内部でスキャン・ペアリング処理用に
+//! 既に登録済みのため、アプリが個別に登録し直すと接続確立直後のBluetoothスタック内部
+//! 処理と衝突してクラッシュする（実機で確認済み）。フック方式なら登録の奪い合いが
+//! 起きないため安全（[`gap_event_hook`]参照）。
 
 use std::ffi::{c_void, CStr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
 use std::sync::OnceLock;
 
 use esp_idf_svc::sys::hid_gap::{
-    esp_ble_gattc_register_callback, esp_hid_gap_init, esp_hid_scan, esp_hid_scan_result_t,
-    esp_hid_scan_results_free, esp_hidh_config_t, esp_hidh_dev_name_get, esp_hidh_dev_open,
-    esp_hidh_event_data_t, esp_hidh_event_t_ESP_HIDH_CLOSE_EVENT as ESP_HIDH_CLOSE_EVENT,
+    esp_ble_gattc_register_callback, esp_bt_gap_cb_event_t,
+    esp_bt_gap_cb_event_t_ESP_BT_GAP_MODE_CHG_EVT, esp_bt_gap_cb_param_t, esp_hid_gap_init,
+    esp_hid_gap_set_event_hook, esp_hid_scan, esp_hid_scan_result_t, esp_hid_scan_results_free,
+    esp_hidh_config_t, esp_hidh_dev_name_get, esp_hidh_dev_open, esp_hidh_event_data_t,
+    esp_hidh_event_t_ESP_HIDH_CLOSE_EVENT as ESP_HIDH_CLOSE_EVENT,
     esp_hidh_event_t_ESP_HIDH_INPUT_EVENT as ESP_HIDH_INPUT_EVENT,
     esp_hidh_event_t_ESP_HIDH_OPEN_EVENT as ESP_HIDH_OPEN_EVENT, esp_hidh_gattc_event_handler,
     esp_hidh_init, HIDH_BTDM_MODE,
 };
 use esp_idf_svc::sys::{
-    esp, esp_bt_gap_cb_event_t, esp_bt_gap_cb_event_t_ESP_BT_GAP_MODE_CHG_EVT,
-    esp_bt_gap_cb_param_t, esp_bt_gap_register_callback, nvs_flash_erase, nvs_flash_init,
-    ESP_ERR_NVS_NEW_VERSION_FOUND, ESP_ERR_NVS_NO_FREE_PAGES,
+    esp, nvs_flash_erase, nvs_flash_init, ESP_ERR_NVS_NEW_VERSION_FOUND, ESP_ERR_NVS_NO_FREE_PAGES,
 };
 
 use super::{ds4_report, Gamepad, GamepadState};
@@ -38,8 +41,7 @@ pub enum GamepadEvent {
     /// 生のHID Inputレポート。[`ds4_report::parse`] で解析する。
     RawInput { report_id: u16, data: Vec<u8> },
     /// BluedroidスタックがBT GAPイベント`ESP_BT_GAP_MODE_CHG_EVT`（接続後のリンク
-    /// ポリシー・ネゴシエーション完了）を通知したことを示す。
-    /// [`register_link_ready_gap_callback`]参照。
+    /// ポリシー・ネゴシエーション完了）を通知したことを示す。[`gap_event_hook`]参照。
     LinkReady,
 }
 
@@ -74,6 +76,11 @@ pub fn init() -> anyhow::Result<Receiver<GamepadEvent>> {
         // 無条件で定義されている HIDH_BTDM_MODE を直接指定する。
         esp!(esp_hid_gap_init(HIDH_BTDM_MODE as u8))?;
         log::info!("bt_hid: gap init done");
+
+        // esp_hid_gapが内部で使うGAPコールバックの登録を奪わずBT GAPイベントを
+        // 監視するため、汎用フック経由で相乗りする（[`gap_event_hook`]参照）。
+        esp_hid_gap_set_event_hook(Some(gap_event_hook));
+        log::info!("bt_hid: gap event hook registered");
 
         // esp_hidh_init() は内部でBLE HID Host(GATTC)を初期化する際、
         // esp_ble_gattc_app_register() の完了イベント(ESP_GATTC_REG_EVT)を
@@ -160,36 +167,25 @@ pub fn scan_and_connect(target_name_prefix: &str, scan_seconds: u32) -> anyhow::
     Ok(())
 }
 
-static GAP_CALLBACK_REGISTERED: AtomicBool = AtomicBool::new(false);
-
-/// BT GAPイベント`ESP_BT_GAP_MODE_CHG_EVT`（接続後のリンクポリシー・ネゴシエーション
-/// 完了）を[`GamepadEvent::LinkReady`]として通知するGAPコールバックを登録する。
+/// `components/esp_hid_gap`の内部GAPコールバックから呼ばれるフック。
+/// `ESP_BT_GAP_MODE_CHG_EVT`（接続後のリンクポリシー・ネゴシエーション完了）を
+/// [`GamepadEvent::LinkReady`]としてチャネルに流す。
 ///
-/// `esp_bt_gap_register_callback`はコールバックを1つしか保持できず、
-/// `components/esp_hid_gap`（vendorしたESP-IDF公式サンプル）がスキャン・ペアリング処理
-/// （PIN/SSP応答、探索結果処理）用に既に登録済みのため、ここで登録し直すとその処理は
-/// 上書きされて動作しなくなる。本プロジェクトはHIDデバイスの接続が確立した後は
-/// 再スキャン・再ペアリングを行わない設計のため、接続確立後（[`GamepadEvent::Connected`]
-/// 送出時）にのみ呼び出すことでこの上書きを安全にしている
-/// （[docs/design/led.md](../../docs/design/led.md)参照）。
-///
-/// 2回目以降の呼び出しは無視する（プロセス中に一度だけ登録すれば十分なため）。
-fn register_link_ready_gap_callback() {
-    if GAP_CALLBACK_REGISTERED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    if let Err(e) = unsafe { esp!(esp_bt_gap_register_callback(Some(gap_event_handler))) } {
-        log::warn!("esp_bt_gap_register_callback failed: {e}");
-    }
-}
-
-unsafe extern "C" fn gap_event_handler(
-    event: esp_bt_gap_cb_event_t,
-    _param: *mut esp_bt_gap_cb_param_t,
-) {
+/// `esp_bt_gap_register_callback`で登録し直す方式は、`esp_hid_gap`が内部で
+/// スキャン・ペアリング処理用に既にコールバックを登録済みであるため、
+/// 上書き登録すると接続確立直後のBluetoothスタック内部処理と衝突しクラッシュする
+/// （実機で確認済み）。この関数は登録の奪い合いが起きないフック機構
+/// （`esp_hid_gap_set_event_hook`）経由で呼ばれるため安全。
+unsafe extern "C" fn gap_event_hook(event: esp_bt_gap_cb_event_t, _param: *mut esp_bt_gap_cb_param_t) {
+    log::info!("gap_event_hook: event={event}");
     if event == esp_bt_gap_cb_event_t_ESP_BT_GAP_MODE_CHG_EVT {
-        if let Some(tx) = EVENT_TX.get() {
-            let _ = tx.try_send(GamepadEvent::LinkReady);
+        match EVENT_TX.get() {
+            Some(tx) => {
+                if let Err(e) = tx.try_send(GamepadEvent::LinkReady) {
+                    log::warn!("gap_event_hook: LinkReady try_send failed: {e:?}");
+                }
+            }
+            None => log::warn!("gap_event_hook: EVENT_TX not set"),
         }
     }
 }
@@ -219,7 +215,6 @@ unsafe extern "C" fn hidh_event_handler(
             return;
         };
         let _ = tx.try_send(GamepadEvent::Connected { name });
-        register_link_ready_gap_callback();
     } else if id == ESP_HIDH_INPUT_EVENT {
         let input = param.input;
         let data = std::slice::from_raw_parts(input.data, input.length as usize).to_vec();

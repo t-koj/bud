@@ -150,25 +150,43 @@ ESP-IDF Bluedroidスタックが接続後にリンクポリシー（sniffモー�
 公式なKconfig/APIはESP-IDFに存在しないため、アプリ側はこのイベントの受信を
 「実際に操作可能になった」の目安として扱う方針にした。
 
-この検知には`components/esp_hid_gap`（vendorしたESP-IDF公式サンプル）を変更せず、
-Rust側（`src/gamepad/bt_hid.rs`）から標準ESP-IDF APIの`esp_bt_gap_register_callback`
-を直接呼び出す方式を採用した。`ESP_BT_GAP_MODE_CHG_EVT`等のBT GAP標準API自体は
-ESP-IDF本体の`bt`コンポーネントが持つAPIであり、`esp_idf_svc::sys::*`から
-`components/esp_hid_gap`を介さず直接使える（vendorが必要なのは`esp_hid_scan`や
-`esp_hidh_init`などESP-IDF公式サンプル固有の関数のみ）。
+### 検討経緯: `esp_bt_gap_register_callback`直接呼び出しは実機でクラッシュした
 
-ただし`esp_bt_gap_register_callback`はコールバックを1つしか保持できず、
+`ESP_BT_GAP_MODE_CHG_EVT`等のBT GAP標準API自体はESP-IDF本体の`bt`コンポーネントが
+持つAPIであり、`esp_idf_svc::sys::*`から`components/esp_hid_gap`を介さず直接使える
+（vendorが必要なのは`esp_hid_scan`や`esp_hidh_init`などESP-IDF公式サンプル固有の
+関数のみ）。そこで当初、`components/esp_hid_gap`を一切変更せず、Rust側
+（`src/gamepad/bt_hid.rs`）からこの標準APIを直接呼び出す方式を試みた。
+
+しかし`esp_bt_gap_register_callback`はコールバックを1つしか保持できず、
 `components/esp_hid_gap`が`esp_hid_gap_init()`内でスキャン・ペアリング処理
 （PIN/SSP応答、探索結果処理）用に自分のコールバックを既に登録している。
-ここでRust側が無条件に登録し直すとその処理を上書きしてしまうため、
-本プロジェクトが「HIDデバイス接続確立後は再スキャン・再ペアリングを行わない」
-設計であることを踏まえ、**接続確立後（`GamepadEvent::Connected`送出時）に限って**
-`register_link_ready_gap_callback()`（`src/gamepad/bt_hid.rs`）が上書き登録する
-方式にした。これにより`components/esp_hid_gap`は一切変更せずに済んでいる。
+「HIDデバイス接続確立後は再スキャン・再ペアリングを行わない」設計であることを
+踏まえ、接続確立後（`GamepadEvent::Connected`送出時）に限って上書き登録すれば
+安全なはずと考えて実装したが、**実機検証でコントローラーが接続できなくなる
+regressionが発生した**。DS4側は接続完了表示になるがATOM側はLED接続待機
+アニメーションのまま進まず、接続確立の瞬間（`ESP_HIDH_OPEN_EVENT`）に上書き登録
+することがBluetoothスタック内部処理と衝突してクラッシュ（ウォッチドッグリセット）
+を引き起こし、再起動ループに陥っていたと考えられる（ATOMIC Motionベース接続中は
+シリアルモニタに繋がらないためクラッシュのログ自体は確認できていない）。
 
-登録したコールバックは`ESP_BT_GAP_MODE_CHG_EVT`受信時に`GamepadEvent::LinkReady`を
-既存のイベントチャネル（`Connected`/`Disconnected`/`RawInput`と同じ`mpsc`チャネル）
-に送出し、`Ds4Gamepad::poll()`がこれを受けて`operation_ready`内部状態を立て、
+### 採用した方式: `components/esp_hid_gap`への汎用フック追加
+
+上記の反省を踏まえ、GAPコールバックの登録を奪い合わない方式に変更した。
+`components/esp_hid_gap/esp_hid_gap.h`/`.c`に汎用フック
+`esp_hid_gap_set_event_hook(void (*hook)(esp_bt_gap_cb_event_t, esp_bt_gap_cb_param_t*))`
+を追加し、既存の内部コールバック`bt_gap_event_handler`の先頭で
+（登録されていれば）このフックを呼ぶだけにした。既存の登録（PIN/SSP応答・
+探索結果処理）は一切変更せず「相乗り」する形のため、登録の奪い合いによる
+クラッシュは起きない。フック自体は特定の意味を持たない汎用の通知機構に留め、
+「どのイベントを見て何をするか」の判断はすべてRust側（`bt_hid.rs`の
+`gap_event_hook`）に置くことで、vendorしたコードへの意味的な侵食も避けている。
+
+`bt_hid::init()`内で`esp_hid_gap_init()`直後に一度だけ`esp_hid_gap_set_event_hook`
+を呼んで登録し（接続前なので衝突の懸念がない）、`gap_event_hook`が
+`ESP_BT_GAP_MODE_CHG_EVT`受信時に`GamepadEvent::LinkReady`を既存のイベント
+チャネル（`Connected`/`Disconnected`/`RawInput`と同じ`mpsc`チャネル）に送出する。
+`Ds4Gamepad::poll()`がこれを受けて`operation_ready`内部状態を立て、
 `Ds4Gamepad::is_operation_ready()`で参照できるようにしている。
 
 `main.rs`のメインループでは、`gamepad.is_operation_ready()`がtrueになるまで

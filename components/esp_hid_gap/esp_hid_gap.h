@@ -85,6 +85,16 @@ typedef struct esp_hidh_scan_result_s {
 esp_err_t esp_hid_gap_init(uint8_t mode);
 esp_err_t esp_hid_gap_deinit(void);
 
+#if !CONFIG_BT_NIMBLE_ENABLED
+// BT GAPイベントを受信するたびに呼び出すフックを登録する。
+// esp_bt_gap_register_callback()はコールバックを1つしか保持できず、
+// このコンポーネントが内部で既に登録済みのため、外部（アプリ）が個別に
+// 登録し直すことはできない。代わりにこのフックで内部コールバックに
+// 相乗りできるようにする。フック内の処理は最小限にすること
+// （呼び出し元のBluetoothスタック内部処理をブロックしないため）。
+void esp_hid_gap_set_event_hook(void (*hook)(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param));
+#endif
+
 esp_err_t esp_hid_scan(uint32_t seconds, size_t *num_results, esp_hid_scan_result_t **results);
 void esp_hid_scan_results_free(esp_hid_scan_result_t *results);
 
