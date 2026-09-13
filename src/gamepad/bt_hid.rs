@@ -227,8 +227,9 @@ unsafe extern "C" fn hidh_event_handler(
     }
 }
 
-/// スティックの値がこの幅以上変化したときだけログ出力する（ノイズによる微小変化での
-/// ログ連発を避けるため。詳細は[design/led.md](../../docs/design/led.md)参照）。
+/// スティックの値（X/Y軸とも）がこの幅以上変化したときだけログ出力する
+/// （ノイズによる微小変化でのログ連発を避けるため。
+/// 詳細は[design/led.md](../../docs/design/led.md)参照）。
 const STICK_LOG_THRESHOLD: i8 = 10;
 
 /// [`GamepadEvent`] を受信して [`GamepadState`] を更新する、DS4用の [`Gamepad`] 実装。
@@ -243,6 +244,8 @@ pub struct Ds4Gamepad {
     raw_input_log_budget: u8,
     /// 直近ログ出力した左右スティックのY値（`STICK_LOG_THRESHOLD`判定用）。
     last_logged_stick_y: (i8, i8),
+    /// 直近ログ出力した左右スティックのX値（`STICK_LOG_THRESHOLD`判定用）。
+    last_logged_stick_x: (i8, i8),
 }
 
 impl Ds4Gamepad {
@@ -254,6 +257,7 @@ impl Ds4Gamepad {
             operation_ready: false,
             raw_input_log_budget: 5,
             last_logged_stick_y: (0, 0),
+            last_logged_stick_x: (0, 0),
         }
     }
 
@@ -299,17 +303,25 @@ impl Gamepad for Ds4Gamepad {
                                 log::info!("buttons changed: {:?}", state.buttons);
                             }
                             let (last_left_y, last_right_y) = self.last_logged_stick_y;
-                            let left_diff = state.left_stick_y as i16 - last_left_y as i16;
-                            let right_diff = state.right_stick_y as i16 - last_right_y as i16;
-                            if left_diff.abs() >= STICK_LOG_THRESHOLD as i16
-                                || right_diff.abs() >= STICK_LOG_THRESHOLD as i16
+                            let left_y_diff = state.left_stick_y as i16 - last_left_y as i16;
+                            let right_y_diff = state.right_stick_y as i16 - last_right_y as i16;
+                            let (last_left_x, last_right_x) = self.last_logged_stick_x;
+                            let left_x_diff = state.left_stick_x as i16 - last_left_x as i16;
+                            let right_x_diff = state.right_stick_x as i16 - last_right_x as i16;
+                            if left_y_diff.abs() >= STICK_LOG_THRESHOLD as i16
+                                || right_y_diff.abs() >= STICK_LOG_THRESHOLD as i16
+                                || left_x_diff.abs() >= STICK_LOG_THRESHOLD as i16
+                                || right_x_diff.abs() >= STICK_LOG_THRESHOLD as i16
                             {
                                 log::info!(
-                                    "stick moved: left_y={} right_y={}",
+                                    "stick moved: left_x={} left_y={} right_x={} right_y={}",
+                                    state.left_stick_x,
                                     state.left_stick_y,
+                                    state.right_stick_x,
                                     state.right_stick_y
                                 );
                                 self.last_logged_stick_y = (state.left_stick_y, state.right_stick_y);
+                                self.last_logged_stick_x = (state.left_stick_x, state.right_stick_x);
                             }
                             self.last_state = state;
                         }
