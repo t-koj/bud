@@ -39,7 +39,7 @@ const SCAN_SECONDS: u32 = 5;
 /// サーボへのI2C書き込みが失敗した際、次に再試行するまでのフレーム数。
 const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
 
-/// コントローラー接続後、`bt_hid::is_ready_for_operation()`がtrueになるまでの
+/// コントローラー接続後、`gamepad.is_operation_ready()`がtrueになるまでの
 /// 待ち時間の上限（ミリ秒）。BluedroidスタックのSniffモード遷移イベントは接続後
 /// 約30秒（ESP-IDF内部定数`BTA_DM_PM_HH_OPEN_DELAY`）で届く想定だが、万一届かない
 /// 場合に備えてタイムアウトでフォールバックする。
@@ -147,7 +147,7 @@ fn main() -> Result<()> {
         }
 
         if !operation_ready {
-            if bt_hid::is_ready_for_operation() {
+            if gamepad.is_operation_ready() {
                 operation_ready = true;
                 log::info!("BT stack mode change event received; controller operation is now ready");
             } else if operation_ready_wait_ms >= OPERATION_READY_TIMEOUT_MS {

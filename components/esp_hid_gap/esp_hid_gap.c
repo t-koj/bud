@@ -6,7 +6,6 @@
 
 
 #include <string.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <inttypes.h>
 #include "sdkconfig.h"
@@ -32,8 +31,6 @@
 #endif
 
 static const char *TAG = "ESP_HID_GAP";
-
-static atomic_bool s_mode_chg_received = false;
 
 // uncomment to print all devices that were seen during a scan
 #define GAP_DBG_PRINTF(...) printf(__VA_ARGS__)
@@ -498,7 +495,6 @@ static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_para
 #endif
     case ESP_BT_GAP_MODE_CHG_EVT:
         ESP_LOGI(TAG, "BT GAP MODE_CHG_EVT mode:%d", param->mode_chg.mode);
-        atomic_store(&s_mode_chg_received, true);
         break;
     case ESP_BT_GAP_PIN_REQ_EVT: {
         ESP_LOGI(TAG, "BT GAP PIN_REQ_EVT min_16_digit:%d", param->pin_req.min_16_digit);
@@ -1106,11 +1102,6 @@ static esp_err_t init_low_level(uint8_t mode)
     return ret;
 }
 #endif
-
-bool esp_hid_gap_mode_chg_received(void)
-{
-    return atomic_load(&s_mode_chg_received);
-}
 
 esp_err_t esp_hid_gap_init(uint8_t mode)
 {
