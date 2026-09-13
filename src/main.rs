@@ -34,6 +34,9 @@ const PS4_CONTROLLER_NAME_PREFIX: &str = "Wireless Controller";
 /// 未接続時に1回のスキャンで待機する秒数。接続待機ループはこれを繰り返す。
 const SCAN_SECONDS: u32 = 5;
 
+/// サーボへのI2C書き込みが失敗した際、次に再試行するまでのフレーム数。
+const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
+
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -88,30 +91,45 @@ fn main() -> Result<()> {
         gamepad.poll();
     }
     let mut led = animation.stop()?;
-    led.off()?;
     log::info!("PS4 controller connected");
 
     // S1(channel 0)は左スティック上下、S3(channel 2)は右スティック上下に割り当てる。
-    let mut servo_ok = [true; 2];
+    // 書き込みが失敗しても`SERVO_RETRY_INTERVAL_FRAMES`フレームごとに再試行する
+    // （ATOMIC Motionベースが後から接続される、または起動直後で応答できないケースに対応するため）。
+    let mut servo_retry_countdown = [0u32; 2];
+    let mut servo_error = [false; 2];
 
     loop {
         let state = gamepad.poll();
         let servo_targets = [(0u8, state.left_stick_y), (2u8, state.right_stick_y)];
         for (idx, &(channel, stick)) in servo_targets.iter().enumerate() {
-            if !servo_ok[idx] {
+            if servo_retry_countdown[idx] > 0 {
+                servo_retry_countdown[idx] -= 1;
                 continue;
             }
 
             let angle = motor::stick_to_servo_angle(stick);
             match motion.set_servo_angle(channel, angle) {
-                Ok(()) => {}
+                Ok(()) => {
+                    servo_error[idx] = false;
+                }
                 Err(e) => {
                     log::warn!(
                         "set_servo_angle({channel}) failed (ATOMIC Motionベース未接続の可能性): {e}"
                     );
-                    servo_ok[idx] = false;
+                    servo_error[idx] = true;
+                    servo_retry_countdown[idx] = SERVO_RETRY_INTERVAL_FRAMES;
                 }
             }
+        }
+
+        let led_status = if servo_error.iter().any(|&e| e) {
+            led.set_error()
+        } else {
+            led.set_ok()
+        };
+        if let Err(e) = led_status {
+            log::warn!("led status update failed: {e}");
         }
 
         FreeRtos::delay_ms(LOOP_INTERVAL_MS);

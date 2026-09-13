@@ -8,6 +8,10 @@ use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 /// ON時の色。フルの(255,255,255)は消費電力・眩しさの観点で過剰なため控えめな輝度にする。
 const ON_COLOR: RGB8 = RGB8::new(16, 16, 16);
 const OFF_COLOR: RGB8 = RGB8::new(0, 0, 0);
+/// メインループ正常時（サーボへのI2C書き込み成功）の色。
+const OK_COLOR: RGB8 = RGB8::new(0, 16, 0);
+/// メインループ異常時（サーボへのI2C書き込み失敗、リトライ待ち中を含む）の色。
+const ERROR_COLOR: RGB8 = RGB8::new(16, 0, 0);
 
 /// ボード搭載のアドレサブルRGB LED（ATOM Matrixは5x5のWS2812C×25画素、
 /// ATOM Liteは単色1画素。どちらもGPIO27固定でRMT経由制御）をON/OFFトグルする。
@@ -54,6 +58,17 @@ impl<'a> Led<'a> {
         } else {
             self.on()
         }
+    }
+
+    /// メインループが正常（サーボへのI2C書き込みが直近成功）であることを示す色を表示する。
+    pub fn set_ok(&mut self) -> Result<()> {
+        self.write(OK_COLOR)
+    }
+
+    /// メインループが異常（サーボへのI2C書き込みが失敗中、リトライ待ちを含む）であることを
+    /// 示す色を表示する。
+    pub fn set_error(&mut self) -> Result<()> {
+        self.write(ERROR_COLOR)
     }
 
     /// コントローラー接続待機中のアニメーションの1フレームを表示する。
