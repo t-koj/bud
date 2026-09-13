@@ -133,11 +133,30 @@ while !gamepad.is_connected() {
 `components/esp_hid_gap/esp_hid_gap.c`を変更した。これにより`scan_and_connect`
 1回あたりの待ち時間がほぼ半分になる。
 
+## RMTバッファ不足によるマーキー表示の乱れ対策
+
+実機で、接続待機中のマーキー表示が先頭の画素は正常だが途中からランダムに
+複数画素が点灯して流れるように乱れ、継続するとさらに乱れが増す症状が発生した。
+
+`ws2812-esp32-rmt-driver`（`Ws2812Esp32Rmt::new`）はデフォルトでRMT送信バッファを
+1ブロック（64 items）しか確保しない。ATOM Matrixの25画素は1200 items必要なため、
+送信中に割り込みで約19回バッファを継ぎ足す(refill)必要がある。本プロジェクトは
+Bluetooth Classic HID (esp_hidh) を常時動かしており、その処理でrefill割り込みの
+サービスが遅延すると、WS2812のリセット仕様（約50us以上のLowで再ラッチ）に
+抵触して途中から画素データがずれる。これが症状と一致すると判断した。
+
+対策として、`Led::new`（`src/led.rs`）で`TxRmtDriver`を明示的に構築し、
+`TransmitConfig::mem_block_num`を最大値の8に設定している。このRMTチャンネルは
+LED専用（他チャンネル未使用）のため、全ブロックを割り当てても問題ない。
+refillの頻度が減ることで遅延に対する猶予が増える。
+
+シリアルモニタが使えない実機制約（[spec.md](../spec.md)未確定の項目参照）により
+本対応の効果は未検証。改善しない場合は`ConnectingAnimation`スレッド
+（`src/connecting_animation.rs`）の優先度引き上げ・CPUコア固定を次の対応候補とする。
+
 ## 未検証事項
 
-* WS2812C 5x5マトリクスがRMT ch0/GPIO27でちらつき無く光るか
-  （公式ドキュメントにはWi-Fi/Bluetooth使用時にちらつく既知の問題が記載されており、
-  必要ならRMTのmem_block_numを増やす対応を検討する）
+* 上記のRMTバッファ拡張策で実機のマーキー表示の乱れが解消するか。
 * DS4 Report ID `0x01`のbyte[5]〜byte[8]（L1/R1/L2/R2/Share/Options/L3/R3、PS/Touchpad、
   L2/R2アナログ値）は実機ログで存在は確認したがビット位置までは未検証
   （本プロジェクトでは現状Square/Cross/Circle/Triangleとスティックのみ使用）。

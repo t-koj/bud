@@ -1,13 +1,21 @@
 use anyhow::Result;
 use esp_idf_svc::hal::gpio::OutputPin;
 use esp_idf_svc::hal::peripheral::Peripheral;
-use esp_idf_svc::hal::rmt::RmtChannel;
+use esp_idf_svc::hal::rmt::config::TransmitConfig;
+use esp_idf_svc::hal::rmt::{RmtChannel, TxRmtDriver};
 use smart_leds::{SmartLedsWrite, RGB8};
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
 /// ON時の色。フルの(255,255,255)は消費電力・眩しさの観点で過剰なため控えめな輝度にする。
 const ON_COLOR: RGB8 = RGB8::new(16, 16, 16);
 const OFF_COLOR: RGB8 = RGB8::new(0, 0, 0);
+/// LED用RMTのTX側メモリブロック数。このRMTチャンネルはLED専用（他チャンネル未使用）
+/// のため割り当て可能な最大値(8)を使う。デフォルト(1ブロック=64 items)では
+/// ATOM Matrix 25画素分(1200 items)の送信中に割り込みでのバッファ継ぎ足し(refill)が
+/// 多数回必要になり、Bluetoothスタックの処理でrefillが遅延するとWS2812のリセット
+/// タイミング仕様(50us以上のLow)に抵触してマーキー表示が途中から乱れる現象が
+/// 実機で確認されたため、refill回数を減らして遅延の猶予を増やす。
+const LED_RMT_MEM_BLOCK_NUM: u8 = 8;
 /// メインループ正常時（サーボへのI2C書き込み成功）の色。
 const OK_COLOR: RGB8 = RGB8::new(0, 16, 0);
 /// メインループ異常時（サーボへのI2C書き込み失敗、リトライ待ち中を含む）の色。
@@ -28,7 +36,11 @@ impl<'a> Led<'a> {
         pin: impl Peripheral<P = impl OutputPin> + 'a,
         pixel_count: usize,
     ) -> Result<Self> {
-        let driver = Ws2812Esp32Rmt::new(channel, pin)?;
+        let rmt_config = TransmitConfig::new()
+            .clock_divider(1)
+            .mem_block_num(LED_RMT_MEM_BLOCK_NUM);
+        let tx = TxRmtDriver::new(channel, pin, &rmt_config)?;
+        let driver = Ws2812Esp32Rmt::new_with_rmt_driver(tx)?;
         let mut led = Self {
             driver,
             pixel_count,
