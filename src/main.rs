@@ -39,19 +39,22 @@ const SCAN_SECONDS: u32 = 5;
 /// サーボへのI2C書き込みが失敗した際、次に再試行するまでのフレーム数。
 const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
 
-/// サーボチャンネル(0〜3 = S1〜S4)のうち、360度連続回転サーボが接続されている
-/// チャンネル（S2, S4）を示す。180度（位置決め）サーボのS1/S3は角度レジスタ、
-/// 連続回転サーボのS2/S4はPWMパルス幅レジスタで制御する（[design/motor.md](../docs/design/motor.md)参照）。
-const CONTINUOUS_ROTATION_CHANNEL: [bool; 4] = [false, true, false, true];
-
-/// S1(0)/S3(2)（180度サーボ）用のニュートラル点トリム（度）。90度からずれていても
-/// 実害がないため通常は0.0のままでよい。
+/// サーボチャンネル(0〜3 = S1〜S4)ごとのニュートラル点トリム（度）。180度
+/// （位置決め）サーボは90度からずれていても実害がないため通常は0.0のままでよい。
+/// 360度連続回転サーボは実際の停止点が90度からずれている個体があるため、
+/// スティック中央で回転が止まるように実機で調整する
+/// （詳細は[design/motor.md](../docs/design/motor.md)参照）。
 const SERVO_NEUTRAL_TRIM_DEG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
-/// S2(1)/S4(3)（360度連続回転サーボ）用のニュートラル点トリム（マイクロ秒）。
-/// 実際の停止点が1500us(90度相当)からずれている個体があるため、スティック中央で
-/// 回転が止まるように実機で調整する（詳細は[design/motor.md](../docs/design/motor.md)参照）。
-const SERVO_NEUTRAL_TRIM_US: [i16; 4] = [0, 0, 0, 0];
+/// 直近に実際に送信した角度からこの角度（度）以上変化しない限り、サーボへの
+/// 書き込みを行わない閾値。180度（位置決め）サーボは目標角度に到達するまで
+/// モーターを駆動し続けるフィードバック機構を持つため、スティック入力の
+/// わずかなノイズ等で毎フレーム目標角度が微小に変化し続けると、サーボが
+/// 一度も静定できず持続的な高負荷状態になり、簡易的な過熱・過電流保護が
+/// 働いて一定周期（実機で観測: 約1秒）でしか反応しなくなる現象が確認された。
+/// 微小な変化を書き込まないことでサーボを静定させ、この問題を防ぐ
+/// （詳細は[design/motor.md](../docs/design/motor.md)参照）。
+const SERVO_SEND_THRESHOLD_DEG: f32 = 2.0;
 
 /// コントローラー接続後、`gamepad.is_operation_ready()`がtrueになるまでの
 /// 待ち時間の上限（ミリ秒）。BluedroidスタックのSniffモード遷移イベントは接続後
@@ -127,6 +130,11 @@ fn main() -> Result<()> {
     let mut servo_retry_countdown = [0u32; 4];
     let mut servo_error = [false; 4];
 
+    // 各チャンネルへ直近に実際に送信した角度（[`SERVO_SEND_THRESHOLD_DEG`]参照）。
+    // 初期値はどのチャンネルも初回書き込みが必ず行われるよう、有効な角度範囲
+    // (0.0〜180.0度)の外の値にしておく。
+    let mut last_sent_angle_deg = [-1000.0f32; 4];
+
     // 接続直後はBluetoothスタックのリンクポリシー・ネゴシエーションが未完了で、
     // 実際の操作が安定しない期間があるため、それを示す専用のLED表示を挟む。
     let mut operation_ready = false;
@@ -149,19 +157,28 @@ fn main() -> Result<()> {
             }
 
             let stick = motor::apply_stick_deadzone(stick);
-            let write_result = if CONTINUOUS_ROTATION_CHANNEL[idx] {
-                let pulse = motor::stick_to_servo_pulse_with_trim(stick, SERVO_NEUTRAL_TRIM_US[idx]);
-                motion.set_servo_pulse_width(channel, pulse)
-            } else {
-                let angle = motor::stick_to_servo_angle_with_trim(stick, SERVO_NEUTRAL_TRIM_DEG[idx]);
-                motion.set_servo_angle(channel, angle)
-            };
-            match write_result {
+            let target_angle =
+                motor::stick_to_servo_angle_with_trim(stick, SERVO_NEUTRAL_TRIM_DEG[idx]);
+            // 直近のI2C書き込みが失敗している場合は、角度の変化量にかかわらず
+            // 再試行して復旧を検知できるようにする（そうしないと、微小な変化
+            // しか無いままエラー状態が解消されずLEDが赤のまま固定されてしまう）。
+            let should_write = servo_error[idx]
+                || motor::exceeds_send_threshold(
+                    last_sent_angle_deg[idx],
+                    target_angle,
+                    SERVO_SEND_THRESHOLD_DEG,
+                );
+            if !should_write {
+                continue;
+            }
+
+            match motion.set_servo_angle(channel, target_angle) {
                 Ok(()) => {
                     if servo_error[idx] {
                         log::info!("servo channel {channel} recovered");
                     }
                     servo_error[idx] = false;
+                    last_sent_angle_deg[idx] = target_angle;
                 }
                 Err(e) => {
                     log::warn!(

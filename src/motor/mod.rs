@@ -36,39 +36,16 @@ impl<'a> AtomicMotion<'a> {
 
     /// サーボ角度を設定する。`channel` は 0〜3。`angle_deg` は 0.0〜180.0度。
     ///
-    /// このAPIはATOMIC Motionベースのファームウェア内部でなめらかに角度遷移させる
-    /// スルーレート制限がかかっている可能性があり、大きな角度変化（連続回転サーボを
-    /// フル速度で駆動する場合等）で実機で約1秒の遅延が観測された。位置決めサーボの
-    /// ような小さい角度変化が主な用途では気づきにくい。即時反映が必要な場合は
-    /// [`set_servo_pulse_width`]を使う。
+    /// 公式Arduinoライブラリ`m5stack/M5Atomic-Motion`の`setServoAngle`
+    /// （`_i2c.writeByte(_addr, reg, angle)`）と同一のプロトコル。
     pub fn set_servo_angle(&mut self, channel: u8, angle_deg: f32) -> Result<()> {
         let angle = angle_deg.clamp(0.0, 180.0) as u8;
         self.write_register(servo_angle_register(channel)?, angle)
     }
 
-    /// サーボのPWMパルス幅を直接設定する。`channel` は 0〜3。`pulse_us` は 500〜2500
-    /// （マイクロ秒、500=0度相当、1500=90度/中央相当、2500=180度相当）。
-    ///
-    /// [`set_servo_angle`]の角度レジスタ経由の制御でスルーレート制限による遅延が
-    /// 観測されたため、360度連続回転サーボ(S2/S4)ではこちらのPWMパルス幅レジスタを
-    /// 使い、スムージングをバイパスして即時にPWM出力を反映させる。
-    pub fn set_servo_pulse_width(&mut self, channel: u8, pulse_us: u16) -> Result<()> {
-        let pulse = pulse_us.clamp(500, 2500);
-        self.write_register16(servo_pulse_register(channel)?, pulse)
-    }
-
     fn write_register(&mut self, register: u8, data: u8) -> Result<()> {
         self.i2c
             .write(I2C_ADDR, &[register, data], I2C_TIMEOUT_MS)?;
-        Ok(())
-    }
-
-    fn write_register16(&mut self, register: u8, data: u16) -> Result<()> {
-        self.i2c.write(
-            I2C_ADDR,
-            &[register, (data >> 8) as u8, (data & 0xff) as u8],
-            I2C_TIMEOUT_MS,
-        )?;
         Ok(())
     }
 }
@@ -87,14 +64,6 @@ fn servo_angle_register(channel: u8) -> Result<u8> {
         anyhow::bail!("servo channel must be 0..=3, got {channel}");
     }
     Ok(channel)
-}
-
-/// サーボchannel(0〜3)をPWMパルス幅レジスタ番号(0x10, 0x12, 0x14, 0x16)に変換する。
-fn servo_pulse_register(channel: u8) -> Result<u8> {
-    if channel > 3 {
-        anyhow::bail!("servo channel must be 0..=3, got {channel}");
-    }
-    Ok(0x10 + channel * 2)
 }
 
 /// スティック値(-100〜100)をサーボ角度(0.0〜180.0度)に変換する。
@@ -117,20 +86,21 @@ pub fn stick_to_servo_angle_with_trim(stick: i8, trim_deg: f32) -> f32 {
     (stick_to_servo_angle(stick) + trim_deg).clamp(0.0, 180.0)
 }
 
-/// スティック値(-100〜100)をサーボPWMパルス幅(500〜2500us)に変換する。
-/// -100→500us、0→1500us（中央/連続回転サーボの停止相当）、100→2500usに線形マッピングする。
-pub fn stick_to_servo_pulse(stick: i8) -> u16 {
-    let ratio = (stick as f32 + 100.0) / 200.0;
-    (500.0 + ratio * 2000.0).round() as u16
-}
-
-/// [`stick_to_servo_pulse`]に、チャンネルごとのニュートラル点トリム`trim_us`
-/// （マイクロ秒）を加えて500〜2500usにクランプする。360度連続回転サーボの
-/// 実際の停止点（個体差あり）を実機で校正するために使う
-/// （[`stick_to_servo_angle_with_trim`]のPWMパルス幅版）。
-pub fn stick_to_servo_pulse_with_trim(stick: i8, trim_us: i16) -> u16 {
-    let base = stick_to_servo_pulse(stick) as i32 + trim_us as i32;
-    base.clamp(500, 2500) as u16
+/// 目標角度`target_deg`が、直近に実際に送信した角度`last_sent_deg`から
+/// `threshold_deg`度以上変化しているかどうかを返す。
+///
+/// 180度（位置決め）サーボは目標角度に到達するまでモーターを駆動し続ける
+/// フィードバック機構を持つ。スティック入力のわずかなノイズ等で毎フレーム
+/// 目標角度が微小に変化し続けると、サーボが一度も目標に到達・静定できず
+/// モーターが駆動し続け（機械的にはロックに近い持続的な高負荷状態になり）、
+/// 安価なサーボの簡易的な過熱・過電流保護が働いて一定周期（実機で観測: 約1秒）
+/// でしか反応しなくなる現象が観測された。360度連続回転サーボは目標角度に
+/// 到達するという概念自体が無い（フィードバックが無効化され、PWM値がそのまま
+/// 速度になるだけ）ためこの問題が起きない。
+///
+/// 微小な変化では実際の書き込みを行わずサーボを静定させることで、この問題を防ぐ。
+pub fn exceeds_send_threshold(last_sent_deg: f32, target_deg: f32, threshold_deg: f32) -> bool {
+    (target_deg - last_sent_deg).abs() >= threshold_deg
 }
 
 /// スティックの「遊び」（デッドゾーン）幅。中央からこの範囲内の入力は0として扱う。
@@ -221,30 +191,14 @@ mod tests {
     }
 
     #[test]
-    fn servo_pulse_register_maps_channel_to_register() {
-        assert_eq!(servo_pulse_register(0).unwrap(), 0x10);
-        assert_eq!(servo_pulse_register(1).unwrap(), 0x12);
-        assert_eq!(servo_pulse_register(2).unwrap(), 0x14);
-        assert_eq!(servo_pulse_register(3).unwrap(), 0x16);
-        assert!(servo_pulse_register(4).is_err());
+    fn exceeds_send_threshold_false_for_small_change() {
+        assert!(!exceeds_send_threshold(90.0, 91.0, 2.0));
+        assert!(!exceeds_send_threshold(90.0, 90.0, 2.0));
     }
 
     #[test]
-    fn stick_to_servo_pulse_maps_stick_range_to_pulse_range() {
-        assert_eq!(stick_to_servo_pulse(-100), 500);
-        assert_eq!(stick_to_servo_pulse(0), 1500);
-        assert_eq!(stick_to_servo_pulse(100), 2500);
-    }
-
-    #[test]
-    fn stick_to_servo_pulse_with_trim_shifts_neutral_point() {
-        assert_eq!(stick_to_servo_pulse_with_trim(0, 50), 1550);
-        assert_eq!(stick_to_servo_pulse_with_trim(0, -50), 1450);
-    }
-
-    #[test]
-    fn stick_to_servo_pulse_with_trim_clamps_to_valid_range() {
-        assert_eq!(stick_to_servo_pulse_with_trim(100, 100), 2500);
-        assert_eq!(stick_to_servo_pulse_with_trim(-100, -100), 500);
+    fn exceeds_send_threshold_true_for_large_change() {
+        assert!(exceeds_send_threshold(90.0, 92.0, 2.0));
+        assert!(exceeds_send_threshold(90.0, 88.0, 2.0));
     }
 }
