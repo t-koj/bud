@@ -69,6 +69,20 @@ pub fn stick_to_servo_angle(stick: i8) -> f32 {
     (stick as f32 + 100.0) / 200.0 * 180.0
 }
 
+/// [`stick_to_servo_angle`]に、チャンネルごとのニュートラル点トリム`trim_deg`を加えて
+/// 0.0〜180.0度にクランプする。
+///
+/// 180度（位置決め）サーボは90度がどの位置か個体差があっても実害がないため
+/// トリム不要（`trim_deg = 0.0`でよい）。一方、360度連続回転サーボは
+/// 「90度=停止」という前提で動作するが、実際の停止点（ニュートラル点）には
+/// 個体差があり90度ちょうどとは限らない（[Servo Kit 360°](https://docs.m5stack.com/en/accessory/servo_kit_360)
+/// 公式ドキュメントも個体ごとの実験確認を求めている）。停止点がずれていると
+/// スティック中央（停止のつもり）でもサーボが微回転し続け、電流を消費し続ける。
+/// `trim_deg`は実機でスティック中央時に回転が止まる値を探して設定する。
+pub fn stick_to_servo_angle_with_trim(stick: i8, trim_deg: f32) -> f32 {
+    (stick_to_servo_angle(stick) + trim_deg).clamp(0.0, 180.0)
+}
+
 /// スティックの「遊び」（デッドゾーン）幅。中央からこの範囲内の入力は0として扱う。
 /// 左右スティックのX/Y軸すべてで共通の値を使う。
 const DEADZONE: i8 = 10;
@@ -142,5 +156,17 @@ mod tests {
     fn apply_stick_deadzone_preserves_extremes() {
         assert_eq!(apply_stick_deadzone(100), 100);
         assert_eq!(apply_stick_deadzone(-100), -100);
+    }
+
+    #[test]
+    fn stick_to_servo_angle_with_trim_shifts_neutral_point() {
+        assert_eq!(stick_to_servo_angle_with_trim(0, 5.0), 95.0);
+        assert_eq!(stick_to_servo_angle_with_trim(0, -5.0), 85.0);
+    }
+
+    #[test]
+    fn stick_to_servo_angle_with_trim_clamps_to_valid_range() {
+        assert_eq!(stick_to_servo_angle_with_trim(100, 10.0), 180.0);
+        assert_eq!(stick_to_servo_angle_with_trim(-100, -10.0), 0.0);
     }
 }
