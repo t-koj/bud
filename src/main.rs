@@ -106,11 +106,12 @@ fn main() -> Result<()> {
     let mut led = animation.stop()?;
     log::info!("PS4 controller connected");
 
-    // S1(channel 0)は左スティック上下、S3(channel 2)は右スティック上下に割り当てる。
+    // S1(channel 0)は左スティック上下、S2(channel 1)は左スティック左右、
+    // S3(channel 2)は右スティック上下、S4(channel 3)は右スティック左右に割り当てる。
     // 書き込みが失敗しても`SERVO_RETRY_INTERVAL_FRAMES`フレームごとに再試行する
     // （ATOMIC Motionベースが後から接続される、または起動直後で応答できないケースに対応するため）。
-    let mut servo_retry_countdown = [0u32; 2];
-    let mut servo_error = [false; 2];
+    let mut servo_retry_countdown = [0u32; 4];
+    let mut servo_error = [false; 4];
 
     // 接続直後はBluetoothスタックのリンクポリシー・ネゴシエーションが未完了で、
     // 実際の操作が安定しない期間があるため、それを示す専用のLED表示を挟む。
@@ -121,14 +122,19 @@ fn main() -> Result<()> {
         let loop_start = Instant::now();
 
         let state = gamepad.poll();
-        let servo_targets = [(0u8, state.left_stick_y), (2u8, state.right_stick_y)];
+        let servo_targets = [
+            (0u8, state.left_stick_y),
+            (1u8, state.left_stick_x),
+            (2u8, state.right_stick_y),
+            (3u8, state.right_stick_x),
+        ];
         for (idx, &(channel, stick)) in servo_targets.iter().enumerate() {
             if servo_retry_countdown[idx] > 0 {
                 servo_retry_countdown[idx] -= 1;
                 continue;
             }
 
-            let angle = motor::stick_to_servo_angle(stick);
+            let angle = motor::stick_to_servo_angle(motor::apply_stick_deadzone(stick));
             match motion.set_servo_angle(channel, angle) {
                 Ok(()) => {
                     if servo_error[idx] {
