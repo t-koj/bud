@@ -75,3 +75,8 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
   あり、その状態でのログによる動作確認ができない。このためメインループの状態は
   LEDの色（緑=正常/赤=異常）で判別できるようにしている（[design/led.md](design/led.md)、
   [design/motor.md](design/motor.md)参照）。
+* S2/S4に接続する360度連続回転サーボは、停止点（ニュートラル点）に個体差があり
+  90度ちょうどとは限らない。ずれていると停止のつもりでも微回転し続け電流を
+  消費し続けるため、チャンネルごとのトリム値`SERVO_NEUTRAL_TRIM_DEG`（`main.rs`）
+  で実機校正する必要がある（現状は未校正でデフォルト0.0）。詳細は
+  [design/motor.md](design/motor.md)参照。

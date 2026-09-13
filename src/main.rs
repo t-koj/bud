@@ -39,6 +39,12 @@ const SCAN_SECONDS: u32 = 5;
 /// サーボへのI2C書き込みが失敗した際、次に再試行するまでのフレーム数。
 const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
 
+/// サーボチャンネル(0〜3 = S1〜S4)ごとのニュートラル点トリム（度）。
+/// S1(0)/S3(2)は180度サーボのため0.0のままでよい。S2(1)/S4(3)は360度連続回転
+/// サーボで、実際の停止点が90度からずれている個体があるため、スティック中央で
+/// 回転が止まるように実機で調整する（詳細は[design/motor.md](../docs/design/motor.md)参照）。
+const SERVO_NEUTRAL_TRIM_DEG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+
 /// コントローラー接続後、`gamepad.is_operation_ready()`がtrueになるまでの
 /// 待ち時間の上限（ミリ秒）。BluedroidスタックのSniffモード遷移イベントは接続後
 /// 約30秒（ESP-IDF内部定数`BTA_DM_PM_HH_OPEN_DELAY`）で届く想定だが、万一届かない
@@ -134,7 +140,10 @@ fn main() -> Result<()> {
                 continue;
             }
 
-            let angle = motor::stick_to_servo_angle(motor::apply_stick_deadzone(stick));
+            let angle = motor::stick_to_servo_angle_with_trim(
+                motor::apply_stick_deadzone(stick),
+                SERVO_NEUTRAL_TRIM_DEG[idx],
+            );
             match motion.set_servo_angle(channel, angle) {
                 Ok(()) => {
                     if servo_error[idx] {
