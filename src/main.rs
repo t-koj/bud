@@ -111,11 +111,14 @@ fn main() -> Result<()> {
             let angle = motor::stick_to_servo_angle(stick);
             match motion.set_servo_angle(channel, angle) {
                 Ok(()) => {
+                    if servo_error[idx] {
+                        log::info!("set_servo_angle({channel}) recovered (angle={angle})");
+                    }
                     servo_error[idx] = false;
                 }
                 Err(e) => {
                     log::warn!(
-                        "set_servo_angle({channel}) failed (ATOMIC Motionベース未接続の可能性): {e}"
+                        "set_servo_angle({channel}, angle={angle}) failed (ATOMIC Motionベース未接続の可能性): {e}"
                     );
                     servo_error[idx] = true;
                     servo_retry_countdown[idx] = SERVO_RETRY_INTERVAL_FRAMES;
