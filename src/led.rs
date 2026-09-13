@@ -22,7 +22,7 @@ const OK_COLOR: RGB8 = RGB8::new(0, 16, 0);
 const ERROR_COLOR: RGB8 = RGB8::new(16, 0, 0);
 /// コントローラー接続完了後、BluetoothスタックのSniffモード遷移待ち
 /// （`bt_hid::is_ready_for_operation()`がfalseの間）を示す色。
-const PREPARING_COLOR: RGB8 = RGB8::new(0, 0, 16);
+const PREPARING_COLOR: RGB8 = RGB8::new(16, 16, 0);
 
 /// ボード搭載のアドレサブルRGB LED（ATOM Matrixは5x5のWS2812C×25画素、
 /// ATOM Liteは単色1画素。どちらもGPIO27固定でRMT経由制御）をON/OFFトグルする。
