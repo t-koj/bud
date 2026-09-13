@@ -20,6 +20,9 @@ const LED_RMT_MEM_BLOCK_NUM: u8 = 8;
 const OK_COLOR: RGB8 = RGB8::new(0, 16, 0);
 /// メインループ異常時（サーボへのI2C書き込み失敗、リトライ待ち中を含む）の色。
 const ERROR_COLOR: RGB8 = RGB8::new(16, 0, 0);
+/// コントローラー接続完了後、BluetoothスタックのSniffモード遷移待ち
+/// （`bt_hid::is_ready_for_operation()`がfalseの間）を示す色。
+const PREPARING_COLOR: RGB8 = RGB8::new(0, 0, 16);
 
 /// ボード搭載のアドレサブルRGB LED（ATOM Matrixは5x5のWS2812C×25画素、
 /// ATOM Liteは単色1画素。どちらもGPIO27固定でRMT経由制御）をON/OFFトグルする。
@@ -81,6 +84,12 @@ impl<'a> Led<'a> {
     /// 示す色を表示する。
     pub fn set_error(&mut self) -> Result<()> {
         self.write(ERROR_COLOR)
+    }
+
+    /// コントローラー接続完了後、まだ実際の操作が有効になっていない
+    /// （Bluetoothスタックのリンクポリシー・ネゴシエーション待ち）ことを示す色を表示する。
+    pub fn set_preparing(&mut self) -> Result<()> {
+        self.write(PREPARING_COLOR)
     }
 
     /// コントローラー接続待機中のアニメーションの1フレームを表示する。

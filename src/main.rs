@@ -37,6 +37,12 @@ const SCAN_SECONDS: u32 = 5;
 /// サーボへのI2C書き込みが失敗した際、次に再試行するまでのフレーム数。
 const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
 
+/// コントローラー接続後、`bt_hid::is_ready_for_operation()`がtrueになるまでの
+/// 待ち時間の上限（ミリ秒）。BluedroidスタックのSniffモード遷移イベントは接続後
+/// 約30秒（ESP-IDF内部定数`BTA_DM_PM_HH_OPEN_DELAY`）で届く想定だが、万一届かない
+/// 場合に備えてタイムアウトでフォールバックする。
+const OPERATION_READY_TIMEOUT_MS: u32 = 45_000;
+
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -104,6 +110,11 @@ fn main() -> Result<()> {
     let mut servo_retry_countdown = [0u32; 2];
     let mut servo_error = [false; 2];
 
+    // 接続直後はBluetoothスタックのリンクポリシー・ネゴシエーションが未完了で、
+    // 実際の操作が安定しない期間があるため、それを示す専用のLED表示を挟む。
+    let mut operation_ready = false;
+    let mut operation_ready_wait_ms: u32 = 0;
+
     loop {
         let state = gamepad.poll();
         let servo_targets = [(0u8, state.left_stick_y), (2u8, state.right_stick_y)];
@@ -131,7 +142,23 @@ fn main() -> Result<()> {
             }
         }
 
-        let led_status = if servo_error.iter().any(|&e| e) {
+        if !operation_ready {
+            if bt_hid::is_ready_for_operation() {
+                operation_ready = true;
+                log::info!("BT stack mode change event received; controller operation is now ready");
+            } else if operation_ready_wait_ms >= OPERATION_READY_TIMEOUT_MS {
+                operation_ready = true;
+                log::warn!(
+                    "BT stack mode change event not received within {OPERATION_READY_TIMEOUT_MS}ms; proceeding anyway"
+                );
+            } else {
+                operation_ready_wait_ms += LOOP_INTERVAL_MS;
+            }
+        }
+
+        let led_status = if !operation_ready {
+            led.set_preparing()
+        } else if servo_error.iter().any(|&e| e) {
             led.set_error()
         } else {
             led.set_ok()
