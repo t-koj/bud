@@ -69,6 +69,37 @@ pub fn stick_to_servo_angle(stick: i8) -> f32 {
     (stick as f32 + 100.0) / 200.0 * 180.0
 }
 
+/// スティックの「遊び」（デッドゾーン）幅。中央からこの範囲内の入力は0として扱う。
+/// 左右スティックのX/Y軸すべてで共通の値を使う。
+const DEADZONE: i8 = 10;
+
+/// スティック値(-100〜100)にデッドゾーンを適用した値へのマッピングテーブル。
+/// index 0〜200 が入力値 -100〜100 に対応する。計算式ではなく事前計算した
+/// テーブル参照にすることで、将来デッドゾーン形状を非線形カーブ等に変更する場合も
+/// テーブル生成部のみの変更で済むようにしている。
+const STICK_DEADZONE_MAP: [i8; 201] = {
+    let mut map = [0i8; 201];
+    let mut i = 0;
+    while i < map.len() {
+        let input = i as i16 - 100;
+        let magnitude = input.abs();
+        map[i] = if magnitude <= DEADZONE as i16 {
+            0
+        } else {
+            let scaled = (magnitude - DEADZONE as i16) * 100 / (100 - DEADZONE as i16);
+            let scaled = if scaled > 100 { 100 } else { scaled };
+            (if input < 0 { -scaled } else { scaled }) as i8
+        };
+        i += 1;
+    }
+    map
+};
+
+/// スティック値(-100〜100)にデッドゾーンを適用した値を返す。
+pub fn apply_stick_deadzone(stick: i8) -> i8 {
+    STICK_DEADZONE_MAP[(stick as i16 + 100) as usize]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +123,24 @@ mod tests {
         assert_eq!(stick_to_servo_angle(-100), 0.0);
         assert_eq!(stick_to_servo_angle(0), 90.0);
         assert_eq!(stick_to_servo_angle(100), 180.0);
+    }
+
+    #[test]
+    fn apply_stick_deadzone_zeroes_values_within_deadzone() {
+        assert_eq!(apply_stick_deadzone(0), 0);
+        assert_eq!(apply_stick_deadzone(10), 0);
+        assert_eq!(apply_stick_deadzone(-10), 0);
+    }
+
+    #[test]
+    fn apply_stick_deadzone_rescales_values_outside_deadzone() {
+        assert_eq!(apply_stick_deadzone(11), 1);
+        assert_eq!(apply_stick_deadzone(-11), -1);
+    }
+
+    #[test]
+    fn apply_stick_deadzone_preserves_extremes() {
+        assert_eq!(apply_stick_deadzone(100), 100);
+        assert_eq!(apply_stick_deadzone(-100), -100);
     }
 }
