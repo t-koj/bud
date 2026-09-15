@@ -55,24 +55,12 @@ impl<'a> Led<'a> {
 
     pub fn on(&mut self) -> Result<()> {
         self.write(ON_COLOR)?;
-        self.is_on = true;
         Ok(())
     }
 
     pub fn off(&mut self) -> Result<()> {
         self.write(OFF_COLOR)?;
-        self.is_on = false;
         Ok(())
-    }
-
-    /// 現時点ではどのボタンにも割り当てていない（`main.rs`未使用）ため警告を抑止する。
-    #[allow(dead_code)]
-    pub fn toggle(&mut self) -> Result<()> {
-        if self.is_on {
-            self.off()
-        } else {
-            self.on()
-        }
     }
 
     /// メインループが正常（サーボへのI2C書き込みが直近成功）であることを示す色を表示する。

@@ -43,11 +43,39 @@ impl<'a> AtomicMotion<'a> {
         self.write_register(servo_angle_register(channel)?, angle)
     }
 
+    pub fn get_servo_angle(&mut self, channel: u8) -> Result<f32> {
+        Ok(self.read_register(servo_angle_register(channel)?)? as f32)
+    }
+
+    /// サーボパルス幅（μs）を取得する。`channel` は 0〜3。
+    pub fn get_servo_pulse(&mut self, channel: u8) -> Result<u16> {
+        let register = servo_pulse_register(channel)?;
+        let mut buf = [0u8; 2];
+        self.i2c
+            .write_read(I2C_ADDR, &[register], &mut buf, I2C_TIMEOUT_MS)?;
+        Ok(((buf[0] as u16) << 8) + buf[1] as u16)
+    }
+
+    /// サーボパルス幅（μs）を設定する。`channel` は 0〜3。
+    pub fn set_servo_pulse(&mut self, channel: u8, width_us: u16) -> Result<()> {
+        let register = servo_pulse_register(channel)?;
+        let data = [register, (width_us >> 8) as u8, (width_us & 0xFF) as u8];
+        self.i2c.write(I2C_ADDR, &data, I2C_TIMEOUT_MS)?;
+        Ok(())
+    }
+
     fn write_register(&mut self, register: u8, data: u8) -> Result<()> {
         self.i2c
             .write(I2C_ADDR, &[register, data], I2C_TIMEOUT_MS)?;
         Ok(())
     }
+
+    fn read_register(&mut self, register: u8) -> Result<u8> {
+        let mut buf = [0u8; 1];
+        self.i2c.write_read(I2C_ADDR, &[register], &mut buf, I2C_TIMEOUT_MS)?;
+        Ok(buf[0])
+    }
+
 }
 
 /// DCモーターchannel(0/1)を速度レジスタ番号(0x20/0x21)に変換する。
@@ -66,41 +94,22 @@ fn servo_angle_register(channel: u8) -> Result<u8> {
     Ok(channel)
 }
 
+/// サーボchannel(0〜3)をパルス幅レジスタ番号(0x10, 0x12, 0x14, 0x16)に変換する。
+fn servo_pulse_register(channel: u8) -> Result<u8> {
+    if channel > 3 {
+        anyhow::bail!("servo channel must be 0..=3, got {channel}");
+    }
+    Ok(2 * channel | 0x10)
+}
+
 /// スティック値(-100〜100)をサーボ角度(0.0〜180.0度)に変換する。
 /// -100→0度、0→90度（中央）、100→180度に線形マッピングする。
 pub fn stick_to_servo_angle(stick: i8) -> f32 {
     (stick as f32 + 100.0) / 200.0 * 180.0
 }
 
-/// [`stick_to_servo_angle`]に、チャンネルごとのニュートラル点トリム`trim_deg`を加えて
-/// 0.0〜180.0度にクランプする。
-///
-/// 180度（位置決め）サーボは90度がどの位置か個体差があっても実害がないため
-/// トリム不要（`trim_deg = 0.0`でよい）。一方、360度連続回転サーボは
-/// 「90度=停止」という前提で動作するが、実際の停止点（ニュートラル点）には
-/// 個体差があり90度ちょうどとは限らない（[Servo Kit 360°](https://docs.m5stack.com/en/accessory/servo_kit_360)
-/// 公式ドキュメントも個体ごとの実験確認を求めている）。停止点がずれていると
-/// スティック中央（停止のつもり）でもサーボが微回転し続け、電流を消費し続ける。
-/// `trim_deg`は実機でスティック中央時に回転が止まる値を探して設定する。
-pub fn stick_to_servo_angle_with_trim(stick: i8, trim_deg: f32) -> f32 {
-    (stick_to_servo_angle(stick) + trim_deg).clamp(0.0, 180.0)
-}
-
-/// 目標角度`target_deg`が、直近に実際に送信した角度`last_sent_deg`から
-/// `threshold_deg`度以上変化しているかどうかを返す。
-///
-/// 180度（位置決め）サーボは目標角度に到達するまでモーターを駆動し続ける
-/// フィードバック機構を持つ。スティック入力のわずかなノイズ等で毎フレーム
-/// 目標角度が微小に変化し続けると、サーボが一度も目標に到達・静定できず
-/// モーターが駆動し続け（機械的にはロックに近い持続的な高負荷状態になり）、
-/// 安価なサーボの簡易的な過熱・過電流保護が働いて一定周期（実機で観測: 約1秒）
-/// でしか反応しなくなる現象が観測された。360度連続回転サーボは目標角度に
-/// 到達するという概念自体が無い（フィードバックが無効化され、PWM値がそのまま
-/// 速度になるだけ）ためこの問題が起きない。
-///
-/// 微小な変化では実際の書き込みを行わずサーボを静定させることで、この問題を防ぐ。
-pub fn exceeds_send_threshold(last_sent_deg: f32, target_deg: f32, threshold_deg: f32) -> bool {
-    (target_deg - last_sent_deg).abs() >= threshold_deg
+pub fn stick_to_servo_speed(stick: i8) -> f32 {
+    (stick as f32 + 100.0) / 200.0 * 180.0
 }
 
 /// スティックの「遊び」（デッドゾーン）幅。中央からこの範囲内の入力は0として扱う。

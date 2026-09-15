@@ -11,7 +11,7 @@ compile_error!("feature \"matrix\" と \"lite\" は同時に指定できませ�
 mod connecting_animation;
 mod gamepad;
 mod led;
-mod motor;
+mod atomic_motion;
 
 use std::time::Instant;
 
@@ -25,42 +25,16 @@ use connecting_animation::ConnectingAnimation;
 use gamepad::bt_hid::{self, Ds4Gamepad};
 use gamepad::Gamepad;
 use led::Led;
-use motor::AtomicMotion;
+use atomic_motion::AtomicMotion;
 
 /// メインループの周期。
-const LOOP_INTERVAL_MS: u32 = 33;
+const LOOP_INTERVAL_MS: u32 = 50;
 
 /// PS4 (DualShock 4) のBluetoothデバイス名。
 const PS4_CONTROLLER_NAME_PREFIX: &str = "Wireless Controller";
 
 /// 未接続時に1回のスキャンで待機する秒数。接続待機ループはこれを繰り返す。
 const SCAN_SECONDS: u32 = 5;
-
-/// サーボへのI2C書き込みが失敗した際、次に再試行するまでのフレーム数。
-const SERVO_RETRY_INTERVAL_FRAMES: u32 = 20;
-
-/// サーボチャンネル(0〜3 = S1〜S4)ごとのニュートラル点トリム（度）。180度
-/// （位置決め）サーボは90度からずれていても実害がないため通常は0.0のままでよい。
-/// 360度連続回転サーボは実際の停止点が90度からずれている個体があるため、
-/// スティック中央で回転が止まるように実機で調整する
-/// （詳細は[design/motor.md](../docs/design/motor.md)参照）。
-const SERVO_NEUTRAL_TRIM_DEG: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-
-/// 直近に実際に送信した角度からこの角度（度）以上変化しない限り、サーボへの
-/// 書き込みを行わない閾値。180度（位置決め）サーボは目標角度に到達するまで
-/// モーターを駆動し続けるフィードバック機構を持つため、スティック入力の
-/// わずかなノイズ等で毎フレーム目標角度が微小に変化し続けると、サーボが
-/// 一度も静定できず持続的な高負荷状態になり、簡易的な過熱・過電流保護が
-/// 働いて一定周期（実機で観測: 約1秒）でしか反応しなくなる現象が確認された。
-/// 微小な変化を書き込まないことでサーボを静定させ、この問題を防ぐ
-/// （詳細は[design/motor.md](../docs/design/motor.md)参照）。
-const SERVO_SEND_THRESHOLD_DEG: f32 = 2.0;
-
-/// コントローラー接続後、`gamepad.is_operation_ready()`がtrueになるまでの
-/// 待ち時間の上限（ミリ秒）。BluedroidスタックのSniffモード遷移イベントは接続後
-/// 約30秒（ESP-IDF内部定数`BTA_DM_PM_HH_OPEN_DELAY`）で届く想定だが、万一届かない
-/// 場合に備えてタイムアウトでフォールバックする。
-const OPERATION_READY_TIMEOUT_MS: u32 = 45_000;
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -103,7 +77,19 @@ fn main() -> Result<()> {
     // 実機のI2Cバス全アドレススキャン（応答皆無）を受けて判明した。
     let i2c_config = I2cConfig::new().baudrate(100.kHz().into());
     let i2c = I2cDriver::new(peripherals.i2c0, pins.gpio25, pins.gpio21, &i2c_config)?;
+    
     let mut motion = AtomicMotion::new(i2c);
+    for channel in 0..4 {
+        let pulse = motion.get_servo_pulse(channel)?;
+        log::info!("Initial servo pulse for channel {}: {}", channel, pulse);
+    }
+    for channel in 0..4 {
+        if let Err(e) = motion.set_servo_pulse(channel, 200) {
+            log::warn!(
+                "set_servo_pulse({channel}, width_us=200) failed: {e}"
+            );
+        }
+    }
 
     // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。LEDの画素数は機種に応じて切り替える。
     let mut led = Led::new(peripherals.rmt.channel0, pins.gpio27, led_pixel_count)?;
@@ -123,26 +109,24 @@ fn main() -> Result<()> {
     let mut led = animation.stop()?;
     log::info!("PS4 controller connected");
 
-    // S1(channel 0)は左スティック上下、S2(channel 1)は左スティック左右、
-    // S3(channel 2)は右スティック上下、S4(channel 3)は右スティック左右に割り当てる。
-    // 書き込みが失敗しても`SERVO_RETRY_INTERVAL_FRAMES`フレームごとに再試行する
-    // （ATOMIC Motionベースが後から接続される、または起動直後で応答できないケースに対応するため）。
-    let mut servo_retry_countdown = [0u32; 4];
-    let mut servo_error = [false; 4];
-
-    // 各チャンネルへ直近に実際に送信した角度（[`SERVO_SEND_THRESHOLD_DEG`]参照）。
-    // 初期値はどのチャンネルも初回書き込みが必ず行われるよう、有効な角度範囲
-    // (0.0〜180.0度)の外の値にしておく。
-    let mut last_sent_angle_deg = [-1000.0f32; 4];
-
+    // S1(channel 0)は左スティック上下、S3(channel 2)は右スティック上下に割り当てる。
     // 接続直後はBluetoothスタックのリンクポリシー・ネゴシエーションが未完了で、
     // 実際の操作が安定しない期間があるため、それを示す専用のLED表示を挟む。
-    let mut operation_ready = false;
-    let mut operation_ready_wait_ms: u32 = 0;
+    if let Err(e) = led.set_preparing() {
+        log::warn!("failed to set LED to preparing state: {e}");
+    }
+    while !gamepad.is_operation_ready() {
+        gamepad.poll();
+        FreeRtos::delay_ms(LOOP_INTERVAL_MS);
+    }
+    if let Err(e) = led.set_ok() {
+        log::warn!("failed to set LED to ok state: {e}");
+    }
+    log::info!("BT stack mode change event received; controller operation is now ready");
 
+    // main loop
     loop {
         let loop_start = Instant::now();
-
         let state = gamepad.poll();
         let servo_targets = [
             (0u8, state.left_stick_y),
@@ -151,72 +135,14 @@ fn main() -> Result<()> {
             (3u8, state.right_stick_x),
         ];
         for (idx, &(channel, stick)) in servo_targets.iter().enumerate() {
-            if servo_retry_countdown[idx] > 0 {
-                servo_retry_countdown[idx] -= 1;
-                continue;
-            }
-
-            let stick = motor::apply_stick_deadzone(stick);
-            let target_angle =
-                motor::stick_to_servo_angle_with_trim(stick, SERVO_NEUTRAL_TRIM_DEG[idx]);
-            // 直近のI2C書き込みが失敗している場合は、角度の変化量にかかわらず
-            // 再試行して復旧を検知できるようにする（そうしないと、微小な変化
-            // しか無いままエラー状態が解消されずLEDが赤のまま固定されてしまう）。
-            let should_write = servo_error[idx]
-                || motor::exceeds_send_threshold(
-                    last_sent_angle_deg[idx],
-                    target_angle,
-                    SERVO_SEND_THRESHOLD_DEG,
-                );
-            if !should_write {
-                continue;
-            }
-
-            match motion.set_servo_angle(channel, target_angle) {
-                Ok(()) => {
-                    if servo_error[idx] {
-                        log::info!("servo channel {channel} recovered");
-                    }
-                    servo_error[idx] = false;
-                    last_sent_angle_deg[idx] = target_angle;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "servo channel {channel} write failed (ATOMIC Motionベース未接続の可能性): {e}"
-                    );
-                    servo_error[idx] = true;
-                    servo_retry_countdown[idx] = SERVO_RETRY_INTERVAL_FRAMES;
-                }
-            }
-        }
-
-        if !operation_ready {
-            if gamepad.is_operation_ready() {
-                operation_ready = true;
-                log::info!("BT stack mode change event received; controller operation is now ready");
-            } else if operation_ready_wait_ms >= OPERATION_READY_TIMEOUT_MS {
-                operation_ready = true;
+            let angle = atomic_motion::stick_to_servo_angle(stick);
+            if let Err(e) =  motion.set_servo_angle(channel, angle) {
                 log::warn!(
-                    "BT stack mode change event not received within {OPERATION_READY_TIMEOUT_MS}ms; proceeding anyway"
+                    "set_servo_angle({channel}, angle={angle}) failed: {e}"
                 );
-            } else {
-                operation_ready_wait_ms += LOOP_INTERVAL_MS;
             }
+            let new_angle =  motion.get_servo_angle(channel)?;
         }
-
-        let led_status = if !operation_ready {
-            led.set_preparing()
-        } else if servo_error.iter().any(|&e| e) {
-            led.set_error()
-        } else {
-            led.set_ok()
-        };
-        if let Err(e) = led_status {
-            log::warn!("led status update failed: {e}");
-        }
-
-        // 処理に要した時間を差し引いた残り時間だけ待機し、ループ周期をLOOP_INTERVAL_MSに
-        // 近づける（処理時間が周期を超えた場合は待機せず即座に次周期へ進む）。
         let elapsed_ms = loop_start.elapsed().as_millis() as u32;
         FreeRtos::delay_ms(LOOP_INTERVAL_MS.saturating_sub(elapsed_ms));
     }
