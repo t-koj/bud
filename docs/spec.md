@@ -19,6 +19,10 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
 * PS4 コントローラーを Bluetooth Classic 経由（HID Host）で接続し、
   スティック・ボタンの入力を取得する
 
+* ATOMIC Motionベースを介さず、GPIO33・GPIO19からサーボ制御信号（50Hz、パルス幅
+  0.5〜2.5ms）を直接出力できる（ESP32 LEDC）。現時点ではどの入力にも割り当てていない。
+  詳細は[design/gpio_servo.md](design/gpio_servo.md)参照。
+
 ### 起動時
 
 * PS4 コントローラーの接続を待機する。

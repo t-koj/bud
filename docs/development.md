@@ -45,6 +45,8 @@ cargo build --features lite     # ATOM Lite向け
 | I2C SDA (ATOMIC Motionベースへ) | GPIO25 | ATOM Matrix/Lite共通。底面のHY2.0-4Pスタッキングコネクタ固定配線 |
 | I2C SCL (ATOMIC Motionベースへ) | GPIO21 | 同上 |
 | オンボードRGB LED (WS2812C, RMT) | GPIO27 | ATOM Matrix/Lite共通の固定配線 |
+| サーボ制御信号 1 (LEDC, 50Hz) | GPIO33 | [design/gpio_servo.md](design/gpio_servo.md) |
+| サーボ制御信号 2 (LEDC, 50Hz) | GPIO19 | 同上 |
 | LED画素数 | Matrix: 25 / Lite: 1 | Cargo feature (`matrix`/`lite`) で切り替え |
 
 当初「ATOM MatrixはGroveポート配線のGPIO32/26を使う」と誤って想定していたが、

@@ -10,6 +10,7 @@ compile_error!("feature \"matrix\" と \"lite\" は同時に指定できませ�
 
 mod connecting_animation;
 mod gamepad;
+mod gpio_servo;
 mod led;
 mod atomic_motion;
 
@@ -24,6 +25,7 @@ use esp_idf_svc::hal::prelude::*;
 use connecting_animation::ConnectingAnimation;
 use gamepad::bt_hid::{self, Ds4Gamepad};
 use gamepad::Gamepad;
+use gpio_servo::GpioServo;
 use led::Led;
 use atomic_motion::AtomicMotion;
 
@@ -90,6 +92,12 @@ fn main() -> Result<()> {
             );
         }
     }
+
+    // GPIO33/GPIO19から直接サーボ制御信号を出す。2チャンネルで50HzのLEDCタイマーを共有する。
+    // 生成直後は信号を出さず、スティックへの割り当ては未実施。
+    let servo_timer = gpio_servo::new_servo_timer(peripherals.ledc.timer0)?;
+    let _gpio_servo_g33 = GpioServo::new(peripherals.ledc.channel0, &servo_timer, pins.gpio33)?;
+    let _gpio_servo_g19 = GpioServo::new(peripherals.ledc.channel1, &servo_timer, pins.gpio19)?;
 
     // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。LEDの画素数は機種に応じて切り替える。
     let mut led = Led::new(peripherals.rmt.channel0, pins.gpio27, led_pixel_count)?;
