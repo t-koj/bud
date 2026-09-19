@@ -13,10 +13,9 @@ mod gamepad;
 mod gpio_servo;
 mod led;
 mod atomic_motion;
-// まだどの設定値も保存していないため、利用側が実装されるまで未使用警告を抑止する
+// 一部のアクセサ(文字列・f32等)は未使用のため警告を抑止する
 #[allow(dead_code)]
 mod preferences;
-use esp_idf_svc::sys::{ESP_BLE_APPEARANCE_PULSE_OXIMETER_FINGERTIP, netif_ext_callback_args_t_ipv6_addr_state_changed_s};
 use gamepad::Dpad;
 
 use std::time::Instant;
@@ -33,13 +32,19 @@ use gamepad::Gamepad;
 use led::Led;
 use atomic_motion::AtomicMotion;
 
-use crate::atomic_motion::{apply_stick_deadzone, stick_to_servo_pulse};
+use crate::atomic_motion::{
+    adjust_servo_center, apply_stick_deadzone, stick_to_servo_pulse, SERVO_CENTER_DEFAULT_US,
+    SERVO_CENTER_STEP_US,
+};
 
 /// メインループの周期。
 const LOOP_INTERVAL_MS: u32 = 33;
 
 /// PS4 (DualShock 4) のBluetoothデバイス名。
 const PS4_CONTROLLER_NAME_PREFIX: &str = "Wireless Controller";
+
+/// サーボ中央パルス幅(μs)をNVSに保存するキー。
+const CENTER_PREF_KEY: &str = "center";
 
 /// 未接続時に1回のスキャンで待機する秒数。接続待機ループはこれを繰り返す。
 const SCAN_SECONDS: u32 = 5;
@@ -79,7 +84,12 @@ fn main() -> Result<()> {
 
     let partition = esp_idf_svc::nvs::EspDefaultNvsPartition::take()?;
     let mut preferences = preferences::Preferences::open(partition, "bud")?;
-    let mut center = preferences.get_u32("center")?.unwrap_or(1_500) as u16;
+    let mut center = adjust_servo_center(
+        preferences
+            .get_u32(CENTER_PREF_KEY)?
+            .map_or(SERVO_CENTER_DEFAULT_US, |v| v as u16),
+        0,
+    );
 
     // ATOMIC Motionベースとの接続はATOM Matrix/Lite共通でG25(SDA)/G21(SCL)
     let i2c_config = I2cConfig::new().baudrate(100.kHz().into());
@@ -100,7 +110,7 @@ fn main() -> Result<()> {
         bt_hid::scan_and_connect(PS4_CONTROLLER_NAME_PREFIX, SCAN_SECONDS)?;
         gamepad.poll();
     }
-    let mut led = animation.stop()?;
+    let led = animation.stop()?;
     log::info!("PS4 controller connected");
 
     for i in 0u8 .. 4 {
@@ -108,8 +118,9 @@ fn main() -> Result<()> {
     }
 
     wait_gamepad_ready(&mut gamepad, led);
-    
-    // main loop
+
+    // 押しっぱなしで毎フレーム調整・NVS書き込みされないよう、押下の瞬間だけ反応する
+    let mut prev_dpad = Dpad::Neutral;
     loop {
         let loop_start = Instant::now();
         let state = gamepad.poll();
@@ -123,7 +134,7 @@ fn main() -> Result<()> {
 
         for (idx, stick) in targets {
             let stick = apply_stick_deadzone(stick);
-            let pulse = stick_to_servo_pulse(stick);
+            let pulse = stick_to_servo_pulse(stick, center);
             if let Err(e) = motion.set_servo_pulse(idx, pulse) {
                 log::warn!(
                     "set_servo_pulse({idx}, width_us={pulse}) failed: {e}"
@@ -138,16 +149,20 @@ fn main() -> Result<()> {
             );
         }
 
-        match state.buttons.dpad {
-            Dpad::Left => {
-                center = center.saturating_add(10);
-                preferences.set_u32("center", center as u32)?;
+        let dpad = state.buttons.dpad;
+        if dpad != prev_dpad {
+            let delta = match dpad {
+                Dpad::Left => -(SERVO_CENTER_STEP_US as i32),
+                Dpad::Right => SERVO_CENTER_STEP_US as i32,
+                _ => 0,
+            };
+            if delta != 0 {
+                center = adjust_servo_center(center, delta);
+                if let Err(e) = preferences.set_u32(CENTER_PREF_KEY, center as u32) {
+                    log::warn!("failed to save servo center ({center}us): {e}");
+                }
             }
-            Dpad::Right => {
-                center = center.saturating_sub(10);
-                preferences.set_u32("center", center as u32)?;
-            }
-            _ => {}
+            prev_dpad = dpad;
         }
 
         let elapsed_ms = loop_start.elapsed().as_millis() as u32;

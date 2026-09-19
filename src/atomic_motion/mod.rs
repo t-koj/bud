@@ -102,11 +102,34 @@ fn servo_pulse_register(channel: u8) -> Result<u8> {
     Ok(2 * channel | 0x10)
 }
 
-/// スティック値(-100〜100)をサーボ角度(0.0〜180.0度)に変換する。
-/// -100→0度、0→90度（中央）、100→180度に線形マッピングする。
-pub fn stick_to_servo_pulse(stick: i8) -> u16 {
-    let stick = stick.clamp(-100, 100) as f32;
-    ((stick + 100.0) * 2_000.0 / 200.0 + 500.0) as u16
+/// サーボパルス幅の下限・上限（μs）。SG90系の0.5〜2.5msに合わせる。
+const SERVO_PULSE_MIN_US: u16 = 500;
+const SERVO_PULSE_MAX_US: u16 = 2_500;
+
+/// サーボ中央パルス幅（μs）の初期値。
+pub const SERVO_CENTER_DEFAULT_US: u16 = 1_500;
+
+/// 十字キー1回の押下で中央パルス幅を動かす量（μs）。
+pub const SERVO_CENTER_STEP_US: u16 = 10;
+
+/// スティック値(-100〜100)をサーボパルス幅(μs)に変換する。
+/// 0→`center_us`、-100→下限、100→上限とし、中央の両側を別々に線形マッピングする。
+/// 中央を動かしても可動範囲の端点を変えないため、片側だけ傾きが変わる。
+pub fn stick_to_servo_pulse(stick: i8, center_us: u16) -> u16 {
+    let stick = stick.clamp(-100, 100) as i32;
+    let center = center_us.clamp(SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US) as i32;
+    let span = if stick >= 0 {
+        SERVO_PULSE_MAX_US as i32 - center
+    } else {
+        center - SERVO_PULSE_MIN_US as i32
+    };
+    (center + stick * span / 100) as u16
+}
+
+/// 中央パルス幅に`delta_us`を加え、有効範囲に収めて返す。
+pub fn adjust_servo_center(center_us: u16, delta_us: i32) -> u16 {
+    (center_us as i32 + delta_us).clamp(SERVO_PULSE_MIN_US as i32, SERVO_PULSE_MAX_US as i32)
+        as u16
 }
 
 pub fn stick_to_servo_speed(stick: i8) -> f32 {
@@ -164,10 +187,26 @@ mod tests {
     }
 
     #[test]
-    fn stick_to_servo_angle_maps_stick_range_to_angle_range() {
-        assert_eq!(stick_to_servo_pulse(-100), 0.0);
-        assert_eq!(stick_to_servo_pulse(0), 90.0);
-        assert_eq!(stick_to_servo_pulse(100), 180.0);
+    fn stick_to_servo_pulse_maps_stick_range_to_pulse_range() {
+        assert_eq!(stick_to_servo_pulse(-100, 1_500), 500);
+        assert_eq!(stick_to_servo_pulse(0, 1_500), 1_500);
+        assert_eq!(stick_to_servo_pulse(100, 1_500), 2_500);
+    }
+
+    #[test]
+    fn stick_to_servo_pulse_moves_neutral_and_keeps_endpoints() {
+        assert_eq!(stick_to_servo_pulse(0, 1_600), 1_600);
+        assert_eq!(stick_to_servo_pulse(-100, 1_600), 500);
+        assert_eq!(stick_to_servo_pulse(100, 1_600), 2_500);
+        assert_eq!(stick_to_servo_pulse(50, 1_500), 2_000);
+    }
+
+    #[test]
+    fn adjust_servo_center_clamps_to_valid_range() {
+        assert_eq!(adjust_servo_center(1_500, 10), 1_510);
+        assert_eq!(adjust_servo_center(1_500, -10), 1_490);
+        assert_eq!(adjust_servo_center(2_495, 10), 2_500);
+        assert_eq!(adjust_servo_center(505, -10), 500);
     }
 
     #[test]
@@ -187,29 +226,5 @@ mod tests {
     fn apply_stick_deadzone_preserves_extremes() {
         assert_eq!(apply_stick_deadzone(100), 100);
         assert_eq!(apply_stick_deadzone(-100), -100);
-    }
-
-    #[test]
-    fn stick_to_servo_angle_with_trim_shifts_neutral_point() {
-        assert_eq!(stick_to_servo_angle_with_trim(0, 5.0), 95.0);
-        assert_eq!(stick_to_servo_angle_with_trim(0, -5.0), 85.0);
-    }
-
-    #[test]
-    fn stick_to_servo_angle_with_trim_clamps_to_valid_range() {
-        assert_eq!(stick_to_servo_angle_with_trim(100, 10.0), 180.0);
-        assert_eq!(stick_to_servo_angle_with_trim(-100, -10.0), 0.0);
-    }
-
-    #[test]
-    fn exceeds_send_threshold_false_for_small_change() {
-        assert!(!exceeds_send_threshold(90.0, 91.0, 2.0));
-        assert!(!exceeds_send_threshold(90.0, 90.0, 2.0));
-    }
-
-    #[test]
-    fn exceeds_send_threshold_true_for_large_change() {
-        assert!(exceeds_send_threshold(90.0, 92.0, 2.0));
-        assert!(exceeds_send_threshold(90.0, 88.0, 2.0));
     }
 }

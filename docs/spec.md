@@ -23,8 +23,8 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
   0.5〜2.5ms）を直接出力できる（ESP32 LEDC）。現時点ではどの入力にも割り当てていない。
   詳細は[design/gpio_servo.md](design/gpio_servo.md)参照。
 
-* 設定値をNVS(不揮発ストレージ)に保存・読み出しできる（電源を切っても残る）。現時点では
-  どの設定値も保存していない。詳細は[design/preferences.md](design/preferences.md)参照。
+* 設定値をNVS(不揮発ストレージ)に保存・読み出しできる（電源を切っても残る）。
+  現在はサーボの中央パルス幅のみ保存している。詳細は[design/preferences.md](design/preferences.md)参照。
 
 ### 起動時
 
@@ -89,7 +89,7 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
   観測された（360度連続回転サーボでは起きない）。直近に実際に送信した角度から
   一定角度（`SERVO_SEND_THRESHOLD_DEG`, 未調整）以上変化しない限り書き込みを
   行わないことで回避する。詳細は[design/motor.md](design/motor.md)参照。
-* 360度連続回転サーボは、停止点（ニュートラル点）に個体差があり90度ちょうど
-  とは限らない。ずれていると停止のつもりでも微回転し続けるため、チャンネルごとの
-  トリム値`SERVO_NEUTRAL_TRIM_DEG`（`main.rs`）で実機校正する必要がある
-  （現状は未校正でデフォルト0.0）。詳細は[design/motor.md](design/motor.md)参照。
+* サーボの中央パルス幅（スティック中立時の出力、初期値1500μs）は、十字キーの左右で
+  調整できる（左=減、右=増、1押下10μs、範囲500〜2500μs）。値はNVSに保存され、
+  電源を切っても残る。360度連続回転サーボの停止点の個体差補正や、180度サーボの
+  中央位置合わせに使う。詳細は[design/motor.md](design/motor.md)参照。

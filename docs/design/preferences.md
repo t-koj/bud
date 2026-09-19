@@ -24,5 +24,4 @@
 
 ## 現状
 
-* モジュールのみ導入済みで、`main` からは未使用（`#[allow(dead_code)]`）。
-  最初の利用候補は `SERVO_NEUTRAL_TRIM_DEG`（チャンネルごとの校正値）の保存。
+* サーボ中央パルス幅（キー`center`, u32）を保存している（[motor.md](motor.md)参照）。
