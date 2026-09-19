@@ -84,15 +84,24 @@ DS4はUSB接続時と同様の簡易フォーマットのまま送ってくる�
 | `data[1]` | 左スティックY |
 | `data[2]` | 右スティックX |
 | `data[3]` | 右スティックY |
-| `data[4]` bit0-3 | D-pad方向（8=中央） |
-| `data[4]` bit4-7 | Square/Cross/Circle(`0x40`)/Triangle |
-| `data[5]` | L1/R1/L2/R2/Share/Options/L3/R3（本プロジェクトでは未使用） |
+| `data[4]` bit0-3 | D-pad方向（hat switch: 0=上, 時計回りに1刻み, 8=中央） |
+| `data[4]` bit4-7 | Square(`0x10`)/Cross(`0x20`)/Circle(`0x40`)/Triangle(`0x80`) |
+| `data[5]` bit0-7 | L1/R1/L2/R2/Share/Options/L3/R3（この順でbit0〜7） |
 | `data[6]` | PS/Touchpad/カウンタ（本プロジェクトでは未使用） |
-| `data[7]`,`data[8]` | L2/R2アナログ値（本プロジェクトでは未使用） |
+| `data[7]`,`data[8]` | L2/R2アナログ値 |
 
 スティックのY軸はDS4の生値は下方向が増加するため、本プロジェクトの規約
 （[`GamepadState`](../../src/gamepad/mod.rs)のdoc comment: 上/右が+100）に合わせて
 符号反転している。
+
+D-padと`data[5]`のビット配置は、DS4のUSB HIDレポートとして広く知られる標準
+フォーマット（実機確認済みの`data[4]`上位ニブル(Square/Cross/Circle/Triangle)の
+並びと整合する）に基づいて実装した。個別ビットの実機検証は未実施
+（[spec.md](../spec.md)の未確定の項目参照）。D-padの8方向は[`Dpad`]列挙型
+（[`src/gamepad/mod.rs`](../../src/gamepad/mod.rs)）で表現し、L1/R1/L2/R2(デジタル)/
+L3/R3/Share/Optionsは[`Buttons`]（同ファイル）の`bool`フィールドとして追加した。
+L2/R2のアナログ値は`GamepadState`に`l2_analog`/`r2_analog`（0〜100に正規化）として
+追加している。
 
 パース関数はハードウェア型に依存しない純粋関数のため`#[cfg(test)]`でテストしている
 （実行可否は[testing.md](../testing.md)、[development.md](../development.md)参照）。
@@ -223,9 +232,10 @@ refillの頻度が減ることで遅延に対する猶予が増える。
 ## 未検証事項
 
 * 上記のRMTバッファ拡張策で実機のマーキー表示の乱れが解消するか。
-* DS4 Report ID `0x01`のbyte[5]〜byte[8]（L1/R1/L2/R2/Share/Options/L3/R3、PS/Touchpad、
-  L2/R2アナログ値）は実機ログで存在は確認したがビット位置までは未検証
-  （本プロジェクトでは現状Square/Cross/Circle/Triangleとスティックのみ使用）。
+* DS4 Report ID `0x01`のD-pad(`data[4]`下位ニブル)、`data[5]`(L1/R1/L2/R2/Share/
+  Options/L3/R3)、`data[7]`/`data[8]`(L2/R2アナログ値)は、標準的なDS4 HIDレポート
+  仕様に基づきビット配置・パースを実装したが、実機での個別ビット検証は未実施。
+  PS(HOME)/Touchpad(`data[6]`)は引き続き本プロジェクトでは未使用。
 * `ESP_BT_GAP_MODE_CHG_EVT`の受信タイミングが実際に「コントローラー操作が有効になる
   タイミング」と厳密に一致するかは未検証（実機ログ上の相関から採用した目安であり、
   因果関係を確認したものではない）。

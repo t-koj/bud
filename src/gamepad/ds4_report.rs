@@ -1,4 +1,4 @@
-use super::{Buttons, GamepadState};
+use super::{Buttons, Dpad, GamepadState};
 
 /// DualShock4 が Bluetooth Classic 接続時に送る HID Input レポート（Report ID `0x01`、
 /// 9バイトの簡易フォーマット）を [`GamepadState`] に変換する。
@@ -18,32 +18,68 @@ use super::{Buttons, GamepadState};
 /// | 1 | 左スティックY |
 /// | 2 | 右スティックX |
 /// | 3 | 右スティックY |
-/// | 4 | bit0-3: D-pad方向(8=中央), bit4-7: Square/Cross/Circle/Triangle |
-/// | 5 | L1/R1/L2/R2/Share/Options/L3/R3（本プロジェクトでは未使用） |
+/// | 4 | bit0-3: D-pad方向(hat switch, 8=中央), bit4-7: Square/Cross/Circle/Triangle |
+/// | 5 | bit0: L1, bit1: R1, bit2: L2, bit3: R2, bit4: Share, bit5: Options, bit6: L3, bit7: R3 |
 /// | 6 | bit0: PS(HOME), bit1: Touchpad, bit2-7: カウンタ（本プロジェクトでは未使用） |
-/// | 7 | L2アナログ値（本プロジェクトでは未使用） |
-/// | 8 | R2アナログ値（本プロジェクトでは未使用） |
+/// | 7 | L2アナログ値 |
+/// | 8 | R2アナログ値 |
+///
+/// D-padとbyte[5]のボタンビット配置はDS4のUSB HIDレポートとして広く知られる標準
+/// フォーマット（Squareの位置を含め既に実機確認済みのbyte[4]と整合する並び）を
+/// 踏襲している。実機での個別ビットの検証は未実施（`docs/spec.md`未確定の項目参照）。
 pub fn parse(report_id: u16, data: &[u8]) -> Option<GamepadState> {
     const BT_INPUT_REPORT_ID: u16 = 0x01;
-    const MIN_LEN: usize = 5;
+    const MIN_LEN: usize = 9;
 
     if report_id != BT_INPUT_REPORT_ID || data.len() < MIN_LEN {
         return None;
     }
 
-    let buttons_byte = data[4];
+    let shape_byte = data[4];
+    let shoulder_byte = data[5];
     Some(GamepadState {
         left_stick_x: axis_from_raw(data[0], false),
         left_stick_y: axis_from_raw(data[1], true),
         right_stick_x: axis_from_raw(data[2], false),
         right_stick_y: axis_from_raw(data[3], true),
+        l2_analog: trigger_from_raw(data[7]),
+        r2_analog: trigger_from_raw(data[8]),
         buttons: Buttons {
-            square: buttons_byte & 0x10 != 0,
-            cross: buttons_byte & 0x20 != 0,
-            circle: buttons_byte & 0x40 != 0,
-            triangle: buttons_byte & 0x80 != 0,
+            square: shape_byte & 0x10 != 0,
+            cross: shape_byte & 0x20 != 0,
+            circle: shape_byte & 0x40 != 0,
+            triangle: shape_byte & 0x80 != 0,
+            dpad: dpad_from_raw(shape_byte & 0x0F),
+            l1: shoulder_byte & 0x01 != 0,
+            r1: shoulder_byte & 0x02 != 0,
+            l2: shoulder_byte & 0x04 != 0,
+            r2: shoulder_byte & 0x08 != 0,
+            share: shoulder_byte & 0x10 != 0,
+            options: shoulder_byte & 0x20 != 0,
+            l3: shoulder_byte & 0x40 != 0,
+            r3: shoulder_byte & 0x80 != 0,
         },
     })
+}
+
+/// D-pad hat switch値(0〜7を上から時計回り, 8=中央)を[`Dpad`]に変換する。
+fn dpad_from_raw(hat: u8) -> Dpad {
+    match hat {
+        0 => Dpad::Up,
+        1 => Dpad::UpRight,
+        2 => Dpad::Right,
+        3 => Dpad::DownRight,
+        4 => Dpad::Down,
+        5 => Dpad::DownLeft,
+        6 => Dpad::Left,
+        7 => Dpad::UpLeft,
+        _ => Dpad::Neutral,
+    }
+}
+
+/// 生値(0〜255)を0〜100に変換する。
+fn trigger_from_raw(raw: u8) -> u8 {
+    (raw as u16 * 100 / 255) as u8
 }
 
 /// 生値(0〜255, 中央128)を -100〜100 に変換する。
@@ -111,8 +147,61 @@ mod tests {
                 cross: true,
                 circle: true,
                 triangle: true,
+                ..Buttons::default()
             }
         );
+    }
+
+    #[test]
+    fn dpad_directions() {
+        for (hat, expected) in [
+            (0, Dpad::Up),
+            (1, Dpad::UpRight),
+            (2, Dpad::Right),
+            (3, Dpad::DownRight),
+            (4, Dpad::Down),
+            (5, Dpad::DownLeft),
+            (6, Dpad::Left),
+            (7, Dpad::UpLeft),
+            (8, Dpad::Neutral),
+        ] {
+            let mut data = neutral_report();
+            data[4] = hat;
+            let state = parse(0x01, &data).unwrap();
+            assert_eq!(state.buttons.dpad, expected, "hat={hat}");
+        }
+    }
+
+    #[test]
+    fn shoulder_and_stick_click_buttons() {
+        let mut data = neutral_report();
+        data[5] = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80;
+        let state = parse(0x01, &data).unwrap();
+        assert_eq!(
+            state.buttons,
+            Buttons {
+                dpad: Dpad::Neutral,
+                l1: true,
+                r1: true,
+                l2: true,
+                r2: true,
+                share: true,
+                options: true,
+                l3: true,
+                r3: true,
+                ..Buttons::default()
+            }
+        );
+    }
+
+    #[test]
+    fn trigger_analog_values() {
+        let mut data = neutral_report();
+        data[7] = 255;
+        data[8] = 0;
+        let state = parse(0x01, &data).unwrap();
+        assert_eq!(state.l2_analog, 100);
+        assert_eq!(state.r2_analog, 0);
     }
 
     #[test]

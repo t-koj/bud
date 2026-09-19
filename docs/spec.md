@@ -56,7 +56,9 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
 * DS4 の Bluetooth Classic HID Input レポートは、当初想定していた Report ID `0x11`
   拡張レポートではなく、実機では Report ID `0x01` の9バイト簡易レポートが届くことを
   実機ログで確認し、パース処理を修正済み。詳細は [design/led.md](design/led.md) 参照。
-  L1/R1/L2/R2/Share/Options/L3/R3等の未使用ボタンのビット位置は未検証。
+  十字キー、L1/R1/L2/R2(デジタル/アナログ両方)/L3/R3/Share/Optionsは、DS4のUSB HID
+  レポートとして広く知られる標準ビット配置に基づき実装したが、個別ビットの実機検証は
+  未実施（PS(HOME)/Touchpadは本プロジェクトでは引き続き未使用）。
 * 登録済みコントローラーのPSボタン再接続と、未登録コントローラーのSHARE+PSペアリングは
   同一のスキャン処理で両対応できることを実機で確認済み（SHARE+PSペアリングモードで
   接続成功）。

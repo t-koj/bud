@@ -104,8 +104,9 @@ fn servo_pulse_register(channel: u8) -> Result<u8> {
 
 /// スティック値(-100〜100)をサーボ角度(0.0〜180.0度)に変換する。
 /// -100→0度、0→90度（中央）、100→180度に線形マッピングする。
-pub fn stick_to_servo_angle(stick: i8) -> f32 {
-    (stick as f32 + 100.0) / 200.0 * 180.0
+pub fn stick_to_servo_pulse(stick: i8) -> u16 {
+    let stick = stick.clamp(-100, 100) as f32;
+    ((stick + 100.0) * 2_000.0 / 200.0 + 500.0) as u16
 }
 
 pub fn stick_to_servo_speed(stick: i8) -> f32 {
@@ -140,7 +141,8 @@ const STICK_DEADZONE_MAP: [i8; 201] = {
 
 /// スティック値(-100〜100)にデッドゾーンを適用した値を返す。
 pub fn apply_stick_deadzone(stick: i8) -> i8 {
-    STICK_DEADZONE_MAP[(stick as i16 + 100) as usize]
+    let stick = stick.clamp(-100, 100) as i16;
+    STICK_DEADZONE_MAP[(stick + 100) as usize]
 }
 
 #[cfg(test)]
@@ -163,9 +165,9 @@ mod tests {
 
     #[test]
     fn stick_to_servo_angle_maps_stick_range_to_angle_range() {
-        assert_eq!(stick_to_servo_angle(-100), 0.0);
-        assert_eq!(stick_to_servo_angle(0), 90.0);
-        assert_eq!(stick_to_servo_angle(100), 180.0);
+        assert_eq!(stick_to_servo_pulse(-100), 0.0);
+        assert_eq!(stick_to_servo_pulse(0), 90.0);
+        assert_eq!(stick_to_servo_pulse(100), 180.0);
     }
 
     #[test]

@@ -12,6 +12,8 @@ mod connecting_animation;
 mod gamepad;
 mod led;
 mod atomic_motion;
+use esp_idf_svc::sys::netif_ext_callback_args_t_ipv6_addr_state_changed_s;
+use gamepad::Dpad;
 
 use std::time::Instant;
 
@@ -79,17 +81,6 @@ fn main() -> Result<()> {
     let i2c = I2cDriver::new(peripherals.i2c0, pins.gpio25, pins.gpio21, &i2c_config)?;
     
     let mut motion = AtomicMotion::new(i2c);
-    for channel in 0..4 {
-        let pulse = motion.get_servo_pulse(channel)?;
-        log::info!("Initial servo pulse for channel {}: {}", channel, pulse);
-    }
-    for channel in 0..4 {
-        if let Err(e) = motion.set_servo_pulse(channel, 200) {
-            log::warn!(
-                "set_servo_pulse({channel}, width_us=200) failed: {e}"
-            );
-        }
-    }
 
     // ATOM Matrix/Lite のオンボードRGB LEDはGPIO27固定配線。LEDの画素数は機種に応じて切り替える。
     let mut led = Led::new(peripherals.rmt.channel0, pins.gpio27, led_pixel_count)?;
@@ -109,6 +100,10 @@ fn main() -> Result<()> {
     let mut led = animation.stop()?;
     log::info!("PS4 controller connected");
 
+    for i in 0u8 .. 4 {
+        motion.set_servo_pulse(i, 1500)?;
+    }
+
     // S1(channel 0)は左スティック上下、S3(channel 2)は右スティック上下に割り当てる。
     // 接続直後はBluetoothスタックのリンクポリシー・ネゴシエーションが未完了で、
     // 実際の操作が安定しない期間があるため、それを示す専用のLED表示を挟む。
@@ -123,25 +118,31 @@ fn main() -> Result<()> {
         log::warn!("failed to set LED to ok state: {e}");
     }
     log::info!("BT stack mode change event received; controller operation is now ready");
+    
+    let max_movement_per_frame   = 100;
 
     // main loop
     loop {
         let loop_start = Instant::now();
         let state = gamepad.poll();
         let servo_targets = [
-            (0u8, state.left_stick_y),
-            (1u8, state.left_stick_x),
-            (2u8, state.right_stick_y),
-            (3u8, state.right_stick_x),
+            (0u8, state.left_stick_x),
         ];
+
         for (idx, &(channel, stick)) in servo_targets.iter().enumerate() {
-            let angle = atomic_motion::stick_to_servo_angle(stick);
-            if let Err(e) =  motion.set_servo_angle(channel, angle) {
+            let current = motion.get_servo_pulse(idx as u8)?;
+            print!("servo channel {} pulse width: {}\r", idx, current);
+            let target = atomic_motion::stick_to_servo_pulse(stick);
+
+            // easing: limit the change in servo pulse width per frame to avoid abrupt movements
+            let next = target.clamp(current.saturating_sub(max_movement_per_frame),
+                current.saturating_add(max_movement_per_frame));
+
+            if let Err(e) =  motion.set_servo_pulse(channel, next) {
                 log::warn!(
-                    "set_servo_angle({channel}, angle={angle}) failed: {e}"
+                    "set_servo_pulse({channel}, width_us={next}) failed: {e}"
                 );
             }
-            let new_angle =  motion.get_servo_angle(channel)?;
         }
         let elapsed_ms = loop_start.elapsed().as_millis() as u32;
         FreeRtos::delay_ms(LOOP_INTERVAL_MS.saturating_sub(elapsed_ms));

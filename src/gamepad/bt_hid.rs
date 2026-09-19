@@ -313,13 +313,6 @@ impl Gamepad for Ds4Gamepad {
                                 || left_x_diff.abs() >= STICK_LOG_THRESHOLD as i16
                                 || right_x_diff.abs() >= STICK_LOG_THRESHOLD as i16
                             {
-                                log::info!(
-                                    "stick moved: left_x={} left_y={} right_x={} right_y={}",
-                                    state.left_stick_x,
-                                    state.left_stick_y,
-                                    state.right_stick_x,
-                                    state.right_stick_y
-                                );
                                 self.last_logged_stick_y = (state.left_stick_y, state.right_stick_y);
                                 self.last_logged_stick_x = (state.left_stick_x, state.right_stick_x);
                             }
