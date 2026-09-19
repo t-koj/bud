@@ -24,4 +24,4 @@
 
 ## 現状
 
-* サーボ中央パルス幅（キー`center`, u32）を保存している（[motor.md](motor.md)参照）。
+* サーボ中央パルス幅（キー`center`, u32）と振幅（キー`gain`, i32）を保存している（[motor.md](motor.md)参照）。

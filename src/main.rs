@@ -33,8 +33,9 @@ use led::Led;
 use atomic_motion::AtomicMotion;
 
 use crate::atomic_motion::{
-    adjust_servo_center, apply_stick_deadzone, stick_to_servo_pulse, SERVO_CENTER_DEFAULT_US,
-    SERVO_CENTER_STEP_US,
+    adjust_servo_center, adjust_servo_gain, apply_servo_gain, apply_stick_deadzone,
+    stick_to_servo_pulse, SERVO_CENTER_DEFAULT_US, SERVO_CENTER_STEP_US,
+    SERVO_GAIN_DEFAULT_PERCENT, SERVO_GAIN_STEP_PERCENT,
 };
 
 /// メインループの周期。
@@ -45,6 +46,9 @@ const PS4_CONTROLLER_NAME_PREFIX: &str = "Wireless Controller";
 
 /// サーボ中央パルス幅(μs)をNVSに保存するキー。
 const CENTER_PREF_KEY: &str = "center";
+
+/// サーボ振幅(%, 負で反転)をNVSに保存するキー。
+const GAIN_PREF_KEY: &str = "gain";
 
 /// 未接続時に1回のスキャンで待機する秒数。接続待機ループはこれを繰り返す。
 const SCAN_SECONDS: u32 = 5;
@@ -88,6 +92,12 @@ fn main() -> Result<()> {
         preferences
             .get_u32(CENTER_PREF_KEY)?
             .map_or(SERVO_CENTER_DEFAULT_US, |v| v as u16),
+        0,
+    );
+    let mut gain = adjust_servo_gain(
+        preferences
+            .get_i32(GAIN_PREF_KEY)?
+            .unwrap_or(SERVO_GAIN_DEFAULT_PERCENT),
         0,
     );
 
@@ -134,7 +144,7 @@ fn main() -> Result<()> {
 
         for (idx, stick) in targets {
             let stick = apply_stick_deadzone(stick);
-            let pulse = stick_to_servo_pulse(stick, center);
+            let pulse = stick_to_servo_pulse(apply_servo_gain(stick, gain), center);
             if let Err(e) = motion.set_servo_pulse(idx, pulse) {
                 log::warn!(
                     "set_servo_pulse({idx}, width_us={pulse}) failed: {e}"
@@ -151,16 +161,22 @@ fn main() -> Result<()> {
 
         let dpad = state.buttons.dpad;
         if dpad != prev_dpad {
-            let delta = match dpad {
-                Dpad::Left => -(SERVO_CENTER_STEP_US as i32),
-                Dpad::Right => SERVO_CENTER_STEP_US as i32,
-                _ => 0,
-            };
-            if delta != 0 {
-                center = adjust_servo_center(center, delta);
-                if let Err(e) = preferences.set_u32(CENTER_PREF_KEY, center as u32) {
-                    log::warn!("failed to save servo center ({center}us): {e}");
+            match dpad {
+                Dpad::Left | Dpad::Right => {
+                    let step = SERVO_CENTER_STEP_US as i32;
+                    center = adjust_servo_center(center, if dpad == Dpad::Left { -step } else { step });
+                    if let Err(e) = preferences.set_u32(CENTER_PREF_KEY, center as u32) {
+                        log::warn!("failed to save servo center ({center}us): {e}");
+                    }
                 }
+                Dpad::Up | Dpad::Down => {
+                    let step = SERVO_GAIN_STEP_PERCENT;
+                    gain = adjust_servo_gain(gain, if dpad == Dpad::Up { step } else { -step });
+                    if let Err(e) = preferences.set_i32(GAIN_PREF_KEY, gain) {
+                        log::warn!("failed to save servo gain ({gain}%): {e}");
+                    }
+                }
+                _ => {}
             }
             prev_dpad = dpad;
         }

@@ -24,7 +24,7 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
   詳細は[design/gpio_servo.md](design/gpio_servo.md)参照。
 
 * 設定値をNVS(不揮発ストレージ)に保存・読み出しできる（電源を切っても残る）。
-  現在はサーボの中央パルス幅のみ保存している。詳細は[design/preferences.md](design/preferences.md)参照。
+  現在はサーボの中央パルス幅と振幅を保存している。詳細は[design/preferences.md](design/preferences.md)参照。
 
 ### 起動時
 
@@ -93,3 +93,7 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
   調整できる（左=減、右=増、1押下10μs、範囲500〜2500μs）。値はNVSに保存され、
   電源を切っても残る。360度連続回転サーボの停止点の個体差補正や、180度サーボの
   中央位置合わせに使う。詳細は[design/motor.md](design/motor.md)参照。
+* サーボの振幅（最大振幅に対する割合、初期値100%）は、十字キーの上下で調整できる
+  （上=増、下=減、1押下10%、範囲-100〜100%）。負の値で稼働方向が反転し、0%で
+  スティックを倒しても動かない。値はNVSに保存される。詳細は
+  [design/motor.md](design/motor.md)参照。

@@ -126,6 +126,22 @@ pub fn stick_to_servo_pulse(stick: i8, center_us: u16) -> u16 {
     (center + stick * span / 100) as u16
 }
 
+/// サーボ振幅(%)の初期値・調整量・範囲。負の値で稼働方向を反転する。
+pub const SERVO_GAIN_DEFAULT_PERCENT: i32 = 100;
+pub const SERVO_GAIN_STEP_PERCENT: i32 = 10;
+const SERVO_GAIN_LIMIT_PERCENT: i32 = 100;
+
+/// スティック値(-100〜100)に振幅`gain_percent`(-100〜100)を掛ける。
+pub fn apply_servo_gain(stick: i8, gain_percent: i32) -> i8 {
+    let gain = gain_percent.clamp(-SERVO_GAIN_LIMIT_PERCENT, SERVO_GAIN_LIMIT_PERCENT);
+    (stick.clamp(-100, 100) as i32 * gain / 100) as i8
+}
+
+/// 振幅に`delta_percent`を加え、有効範囲に収めて返す。
+pub fn adjust_servo_gain(gain_percent: i32, delta_percent: i32) -> i32 {
+    (gain_percent + delta_percent).clamp(-SERVO_GAIN_LIMIT_PERCENT, SERVO_GAIN_LIMIT_PERCENT)
+}
+
 /// 中央パルス幅に`delta_us`を加え、有効範囲に収めて返す。
 pub fn adjust_servo_center(center_us: u16, delta_us: i32) -> u16 {
     (center_us as i32 + delta_us).clamp(SERVO_PULSE_MIN_US as i32, SERVO_PULSE_MAX_US as i32)
@@ -207,6 +223,23 @@ mod tests {
         assert_eq!(adjust_servo_center(1_500, -10), 1_490);
         assert_eq!(adjust_servo_center(2_495, 10), 2_500);
         assert_eq!(adjust_servo_center(505, -10), 500);
+    }
+
+    #[test]
+    fn apply_servo_gain_scales_and_reverses() {
+        assert_eq!(apply_servo_gain(100, 100), 100);
+        assert_eq!(apply_servo_gain(100, 50), 50);
+        assert_eq!(apply_servo_gain(-100, 50), -50);
+        assert_eq!(apply_servo_gain(100, -100), -100);
+        assert_eq!(apply_servo_gain(40, -50), -20);
+        assert_eq!(apply_servo_gain(100, 0), 0);
+    }
+
+    #[test]
+    fn adjust_servo_gain_clamps_to_valid_range() {
+        assert_eq!(adjust_servo_gain(100, 10), 100);
+        assert_eq!(adjust_servo_gain(0, -10), -10);
+        assert_eq!(adjust_servo_gain(-95, -10), -100);
     }
 
     #[test]
