@@ -9,3 +9,4 @@
 * [design/motor.md](design/motor.md) — ATOMIC Motionベース（I2C）によるモーター/サーボ制御
 * [design/led.md](design/led.md) — オンボードLEDの制御とPS4コントローラーとの連携
 * [design/gpio_servo.md](design/gpio_servo.md) — ESP32 GPIO(LEDC)からのサーボ制御信号の直接出力（GPIO33/GPIO19）
+* [design/preferences.md](design/preferences.md) — NVSによる設定値の不揮発保存（Preferences）

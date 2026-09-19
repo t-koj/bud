@@ -23,6 +23,9 @@ PS4 (DualShock 4) コントローラーを Bluetooth Classic で接続し、
   0.5〜2.5ms）を直接出力できる（ESP32 LEDC）。現時点ではどの入力にも割り当てていない。
   詳細は[design/gpio_servo.md](design/gpio_servo.md)参照。
 
+* 設定値をNVS(不揮発ストレージ)に保存・読み出しできる（電源を切っても残る）。現時点では
+  どの設定値も保存していない。詳細は[design/preferences.md](design/preferences.md)参照。
+
 ### 起動時
 
 * PS4 コントローラーの接続を待機する。
